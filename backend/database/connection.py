@@ -1,6 +1,7 @@
 import os
-from pymongo import MongoClient
-from decouple import config
+from pymongo import MongoClient #type:ignore
+from decouple import config #type: ignore
+
 
 # Fetch configuration variables from .env using decouple
 MONGO_URI = config('MONGO_URI', default='mongodb://localhost:27017/')

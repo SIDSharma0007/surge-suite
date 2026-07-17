@@ -9,8 +9,8 @@ from . import config
 class FaceDatabase:
     def __init__(self):
         self.use_json_fallback = False
-        # Place JSON files in a subdirectory of services called config.JSON_DATABASE
-        self.json_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.JSON_DATABASE)
+        # Place JSON files in a subdirectory of services called config.FACE_COLLECTION
+        self.json_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.FACE_COLLECTION)
         
         try:
             print("Connecting to MongoDB...")
@@ -21,7 +21,7 @@ class FaceDatabase:
             self.client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=1500)
             self.client.server_info()  # Force connection verification
             self.db = self.client[db_name]
-            self.collection = self.db[config.JSON_DATABASE]
+            self.collection = self.db[config.FACE_COLLECTION]
             print("Connected to MongoDB successfully.")
         except Exception as err:
             print(f"MongoDB connection failed: {err}")

@@ -51,7 +51,7 @@ REGISTRATION_SLEEP = 0.10
 # Face Database
 # ==========================
 
-JSON_DATABASE = "registered_faces"
+FACE_COLLECTION = "registered_faces"
 
 DEFAULT_REFERENCE_NAME = "Reference Face"
 

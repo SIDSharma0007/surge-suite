@@ -31,6 +31,11 @@ def register_face_from_image(name, img, user_id=None, device_id=None, extra_meta
         
     embedding = faces[0]['embedding']
     
+    # Check for duplicate registration
+    existing = find_best_match(embedding, load_all_faces())
+    if existing["is_match"]:
+        return None, f"Face already registered under user: {existing['name']}."
+        
     # Save face embedding to MongoDB/JSON fallback
     record = register_face(
         name=name,
