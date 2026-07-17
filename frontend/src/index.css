@@ -1,0 +1,332 @@
+/* Global Design System variables */
+:root {
+  /* Strict Typography Scale */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --text-xs: 12px;     /* Caption / Muted */
+  --text-sm: 14px;     /* Body / Labels */
+  --text-base: 15px;   /* Standard Body / Controls */
+  --text-lg: 18px;     /* Subheading */
+  --text-xl: 22px;     /* Heading */
+  --text-2xl: 32px;    /* Display */
+
+  /* Strict Spacing Scale (4px, 8px, 12px, 16px, 24px, 32px, 48px, 64px) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* Border Radii */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-full: 9999px;
+
+  /* Motion System (Apple HIG Easing) */
+  --dur-fast: 150ms;
+  --dur-normal: 250ms;
+  --dur-slow: 400ms;
+  --ease-apple: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --transition-all: all var(--dur-normal) var(--ease-apple);
+
+  /* Glassmorphism Presets */
+  --glass-blur: blur(28px);
+  --glass-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.08), 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+}
+
+/* Light Theme (Strict Contrast Monochrome Gradients) */
+:root, .theme-light {
+  --bg-app: linear-gradient(135deg, #ffffff 0%, #f3f3f3 100%);
+  --bg-app-solid: #f3f3f3;
+  --bg-card: #ffffff;
+  --bg-sidebar: #f8f8fa;
+  --bg-input: #ffffff;
+  
+  --bg-hover: rgba(0, 0, 0, 0.03);
+  --bg-active: rgba(0, 0, 0, 0.06);
+  --bg-focus-ring: rgba(0, 0, 0, 0.04);
+
+  --text-primary: #111111;
+  --text-secondary: #555557;
+  --text-muted: #8e8e93;
+
+  --border-light: rgba(0, 0, 0, 0.04);
+  --border-medium: rgba(0, 0, 0, 0.08);
+  --border-focus: #111111;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.02);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.05);
+
+  /* Glassmorphism Specs */
+  --glass-bg: rgba(255, 255, 255, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.6);
+  --glass-inner-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.8);
+
+  /* Scanner styles */
+  --scanner-bg-active: rgba(0, 0, 0, 0.01);
+  --scanner-ring-default: rgba(0, 0, 0, 0.04);
+
+  /* Status Feedback Indicators */
+  --status-success: #10b981;
+  --status-error: #ef4444;
+  --status-warning: #f59e0b;
+}
+
+/* Dark Theme (Strict Contrast Monochrome Gradients) */
+.theme-dark {
+  --bg-app: linear-gradient(135deg, #050505 0%, #111111 100%);
+  --bg-app-solid: #09090b;
+  --bg-card: #18181b;
+  --bg-sidebar: #0e0e10;
+  --bg-input: #1f1f23;
+  
+  --bg-hover: rgba(255, 255, 255, 0.03);
+  --bg-active: rgba(255, 255, 255, 0.06);
+  --bg-focus-ring: rgba(255, 255, 255, 0.04);
+
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+
+  --border-light: rgba(255, 255, 255, 0.04);
+  --border-medium: rgba(255, 255, 255, 0.08);
+  --border-focus: #ffffff;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
+
+  /* Glassmorphism Specs */
+  --glass-bg: rgba(18, 18, 20, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --glass-inner-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+
+  /* Scanner styles */
+  --scanner-bg-active: rgba(255, 255, 255, 0.015);
+  --scanner-ring-default: rgba(255, 255, 255, 0.04);
+
+  /* Status Feedback Indicators */
+  --status-success: #10b981;
+  --status-error: #ef4444;
+  --status-warning: #f59e0b;
+}
+
+/* Reset Rules */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  min-height: 100vh;
+}
+
+body {
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color var(--dur-normal) var(--ease-apple), color var(--dur-normal) var(--ease-apple);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Tactile Buttons */
+button {
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  outline: none;
+  transition: var(--transition-all);
+}
+
+button:focus-visible {
+  box-shadow: 0 0 0 2px var(--bg-app-solid), 0 0 0 4px var(--border-focus) !important;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+/* Inputs */
+input, select, textarea {
+  font-family: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  outline: none;
+  transition: var(--transition-all);
+}
+
+input:focus-visible {
+  border-color: var(--border-focus) !important;
+  box-shadow: 0 0 0 3px var(--bg-focus-ring) !important;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-medium);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
+
+/* Fade In Page Transitions */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Responsive Dashboard Layout adjustments */
+@media (min-width: 769px) {
+  aside {
+    transform: translateX(0) !important;
+    left: 0 !important;
+  }
+  
+  /* Select mainContent wrapper by matching element style structure */
+  div[style*="marginLeft: 0"],
+  div[style*="margin-left: 0"] {
+    margin-left: 260px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  button[style*="display: none"],
+  button[style*="display:none"] {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    width: 36px;
+    height: 36px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: var(--transition-all);
+  }
+}
+
+/* Sidebar Nav Item Hover and Active states */
+.sidebar-nav-item {
+  position: relative;
+  transition: var(--transition-all);
+}
+
+.sidebar-nav-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  width: 3px;
+  height: 16px;
+  background: var(--text-primary);
+  border-radius: var(--radius-full);
+  transition: transform var(--dur-normal) var(--ease-apple);
+}
+
+.sidebar-nav-item.active::before {
+  transform: translateY(-50%) scaleY(1);
+}
+
+.sidebar-nav-item:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+.sidebar-nav-item:hover svg {
+  opacity: 1 !important;
+  transform: scale(1.05);
+}
+
+.sidebar-nav-item:active {
+  transform: scale(0.98);
+}
+
+/* Dashboard Metric Cards Lift */
+div[style*="grid"] > div,
+div[style*="emptyCard"],
+div[style*="sidebarWidget"] {
+  transition: var(--transition-all);
+}
+
+div[style*="grid"] > div:hover,
+div[style*="emptyCard"]:hover,
+div[style*="sidebarWidget"]:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md) !important;
+  border-color: var(--border-medium) !important;
+}
+
+/* Glassmorphism overrides for elevated cards */
+.faceid-card,
+button[aria-label*="Switch to"],
+div[style*="sidebarWidget"],
+div[style*="offlineCard"] {
+  background: var(--glass-bg) !important;
+  backdrop-filter: var(--glass-blur) !important;
+  -webkit-backdrop-filter: var(--glass-blur) !important;
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow), var(--glass-inner-shadow) !important;
+}
+
+/* Button & Action lifts */
+button[style*="createBtn"],
+button[style*="actionBtn"] {
+  transition: var(--transition-all);
+}
+
+button[style*="createBtn"]:hover,
+button[style*="actionBtn"]:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md) !important;
+}
+
+button[style*="createBtn"]:active,
+button[style*="actionBtn"]:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* Profile Badge Glow */
+div[style*="profileBadge"] {
+  transition: var(--transition-all);
+  cursor: pointer;
+}
+
+div[style*="profileBadge"]:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 0 3px var(--bg-focus-ring);
+}
+

@@ -1,340 +1,361 @@
-/* Bounding Layout Card */
-.face-auth-wrapper {
+/* Face ID Container & Card styles */
+.faceid-container {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 24px;
+  width: 100%;
+  animation: fadeIn var(--dur-normal) var(--ease-apple);
 }
 
-.face-auth-card {
-  position: relative;
+.faceid-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   width: 100%;
   max-width: 380px;
-  background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 28px;
-  padding: 40px 32px;
-  text-align: center;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 
-              0 0 40px rgba(var(--state-color-rgb), 0.06);
-  overflow: hidden;
-  transition: box-shadow 0.4s cubic-bezier(0.4, 0, 0.2, 1), 
-              border-color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  font-family: 'Outfit', 'Inter', -apple-system, sans-serif;
-  color: #ffffff;
-}
-
-/* Background Radial Glow */
-.face-auth-glow {
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  right: -50%;
-  bottom: -50%;
-  background: radial-gradient(circle, rgba(var(--state-color-rgb), 0.06) 0%, transparent 65%);
-  pointer-events: none;
-  z-index: 0;
-  transition: background 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.face-auth-header,
-.face-auth-body,
-.face-auth-footer {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  box-shadow: var(--glass-shadow), var(--glass-inner-shadow);
+  border-radius: var(--radius-xl);
+  padding: var(--space-6) var(--space-5);
+  transition: var(--transition-all);
   position: relative;
-  z-index: 1;
+  overflow: hidden;
 }
 
-/* Secure Biometric Badge */
-.face-auth-badge {
-  display: inline-block;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  padding: 6px 14px;
-  border-radius: 100px;
-  background: rgba(var(--state-color-rgb), 0.08);
-  color: rgb(var(--state-color-rgb));
-  border: 1px solid rgba(var(--state-color-rgb), 0.18);
-  margin-bottom: 16px;
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.face-auth-title {
-  font-size: 1.45rem;
+.faceid-header-badge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-light);
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
   font-weight: 600;
-  margin: 0 0 28px 0;
-  letter-spacing: -0.5px;
-  background: linear-gradient(135deg, #ffffff 60%, rgba(255, 255, 255, 0.7));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: var(--space-6);
 }
 
-/* Scanner Core Container */
-.scanner-container {
-  position: relative;
-  width: 230px;
-  height: 230px;
-  margin: 0 auto 32px auto;
+.faceid-body {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
+  margin-bottom: var(--space-5);
 }
 
-/* Corner bracket layouts */
-.scanner-corner {
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(var(--state-color-rgb), 0.25);
-  transition: border-color 0.4s ease;
-}
-
-.scanner-corner.top-left {
-  top: -6px;
-  left: -6px;
-  border-right: none;
-  border-bottom: none;
-}
-
-.scanner-corner.top-right {
-  top: -6px;
-  right: -6px;
-  border-left: none;
-  border-bottom: none;
-}
-
-.scanner-corner.bottom-left {
-  bottom: -6px;
-  left: -6px;
-  border-right: none;
-  border-top: none;
-}
-
-.scanner-corner.bottom-right {
-  bottom: -6px;
-  right: -6px;
-  border-left: none;
-  border-top: none;
-}
-
-/* Pulse circle frame */
-.scanner-frame {
+/* FaceID Circular Scanner Box */
+.faceid-scanner-box {
   position: relative;
-  width: 210px;
-  height: 210px;
-  border-radius: 50%;
-  border: 2px solid rgba(var(--state-color-rgb), 0.12);
-  background: rgba(8, 12, 24, 0.65);
+  width: 160px;
+  height: 160px;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  animation: pulse-ring 2.6s infinite ease-in-out;
+  background: var(--scanner-bg-active);
+  border-radius: var(--radius-full);
+  transition: var(--transition-all);
 }
 
-/* Grid scanning background */
-.scanner-grid {
+/* Circular Dotted/Dashed Rings */
+.faceid-ring {
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
-  bottom: 0;
-  background-image: 
-    linear-gradient(rgba(var(--state-color-rgb), 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(var(--state-color-rgb), 0.04) 1px, transparent 1px);
-  background-size: 14px 14px;
-  opacity: 0.85;
-  pointer-events: none;
+  width: 100%;
+  height: 100%;
 }
 
-/* Loading/Verifying spin dashes */
-.scanner-spinner {
+.faceid-ring-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.faceid-ring-bg {
+  fill: none;
+  stroke: var(--scanner-ring-default);
+  stroke-width: 1.5;
+}
+
+.faceid-ring-active {
+  fill: none;
+  stroke: var(--text-primary);
+  stroke-width: 2.5;
+  stroke-dasharray: 290;
+  stroke-dashoffset: 290;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--dur-slow) var(--ease-apple), stroke var(--dur-normal) var(--ease-apple);
+}
+
+/* State Animations on Ring */
+.state-initializing .faceid-ring-active,
+.state-verifying .faceid-ring-active {
+  stroke-dasharray: 30, 15;
+  stroke-dashoffset: 0;
+  animation: spin 3s linear infinite;
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+}
+
+.state-scanning .faceid-ring-active {
+  stroke-dasharray: 60, 230;
+  stroke-dashoffset: 0;
+  animation: spin 1.5s var(--ease-apple) infinite;
+  stroke: var(--text-primary);
+  stroke-width: 3.5;
+}
+
+.state-ready .faceid-ring-active {
+  stroke-dasharray: 290;
+  stroke-dashoffset: 0;
+  animation: pulse-ring 2.5s var(--ease-apple) infinite;
+  stroke: var(--text-secondary);
+}
+
+.state-success .faceid-ring-active {
+  stroke-dasharray: 290;
+  stroke-dashoffset: 0;
+  stroke: var(--status-success);
+  stroke-width: 3;
+}
+
+.state-unknown .faceid-ring-active {
+  stroke-dasharray: 290;
+  stroke-dashoffset: 0;
+  stroke: var(--status-error);
+  stroke-width: 3;
+}
+
+/* Scanning Sweep Laser */
+.faceid-laser-sweep {
   position: absolute;
-  top: 4px;
-  left: 4px;
-  right: 4px;
-  bottom: 4px;
-  border-radius: 50%;
-  border: 2px dashed rgba(var(--state-color-rgb), 0.5);
-  animation: rotate-hub 6s linear infinite;
+  top: 10%;
+  left: 10%;
+  width: 80%;
+  height: 80%;
+  background: radial-gradient(circle, rgba(var(--text-primary), 0.08) 0%, transparent 70%);
+  border-radius: var(--radius-full);
+  opacity: 0;
   pointer-events: none;
+  transition: opacity var(--dur-normal) var(--ease-apple);
 }
 
-/* Vertical Laser Sweep Bar */
-.scanner-laser {
-  position: absolute;
-  left: 5%;
-  width: 90%;
-  height: 3px;
-  background: linear-gradient(90deg, transparent, rgb(var(--state-color-rgb)), transparent);
-  box-shadow: 0 0 10px rgb(var(--state-color-rgb)), 0 0 20px rgb(var(--state-color-rgb));
-  animation: laser-sweep 2.4s infinite ease-in-out;
-  pointer-events: none;
+.state-scanning .faceid-laser-sweep {
+  opacity: 1;
+  animation: sweep 2s var(--ease-apple) infinite;
 }
 
-/* Vector Silhouette */
-.scanner-silhouette {
+/* Central Graphic */
+.faceid-center-graphic {
   position: absolute;
   width: 90px;
   height: 90px;
-  z-index: 1;
-  opacity: 0.85;
-}
-
-/* Success/Error mark container */
-.scanner-result {
-  width: 76px;
-  height: 76px;
-  z-index: 2;
-  animation: scale-in 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-}
-
-/* Draw Animations */
-.checkmark-circle, .cross-circle {
-  stroke-dasharray: 166;
-  stroke-dashoffset: 166;
-  stroke-width: 2;
-  stroke-miterlimit: 10;
-  stroke: rgb(var(--state-color-rgb));
-  animation: stroke 0.5s cubic-bezier(0.65, 0, 0.45, 1) forwards;
-}
-
-.checkmark-check {
-  transform-origin: 50% 50%;
-  stroke-dasharray: 48;
-  stroke-dashoffset: 48;
-  stroke-width: 3.5;
-  stroke-linecap: round;
-  stroke: rgb(var(--state-color-rgb));
-  animation: stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.5s forwards;
-}
-
-.cross-line-1 {
-  stroke-dasharray: 48;
-  stroke-dashoffset: 48;
-  stroke-width: 3.5;
-  stroke-linecap: round;
-  stroke: rgb(var(--state-color-rgb));
-  animation: stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.4s forwards;
-}
-
-.cross-line-2 {
-  stroke-dasharray: 48;
-  stroke-dashoffset: 48;
-  stroke-width: 3.5;
-  stroke-linecap: round;
-  stroke: rgb(var(--state-color-rgb));
-  animation: stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.6s forwards;
-}
-
-/* Text Containers */
-.status-text-container {
-  padding: 0 12px;
-}
-
-.status-title {
-  font-size: 1.15rem;
-  font-weight: 600;
-  margin: 0 0 6px 0;
-  color: #ffffff;
-  transition: color 0.4s ease;
-}
-
-.status-subtitle {
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.45);
-  margin: 0;
-  min-height: 1.2rem;
-}
-
-/* Presentational Demo Controller Console */
-.face-auth-demo-bar {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
-  gap: 8px;
-  max-width: 380px;
-  background: rgba(15, 23, 42, 0.4);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 16px;
-  padding: 12px;
+}
+
+/* Silhouette */
+.faceid-silhouette {
+  width: 58px;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.2;
+  transition: var(--transition-all);
+}
+
+.silhouette-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.silhouette-path,
+.silhouette-eye,
+.silhouette-mouth {
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: var(--transition-all);
+}
+
+.state-scanning .faceid-silhouette {
+  opacity: 0.75;
+  animation: pulse-face 2s var(--ease-apple) infinite;
+}
+
+.state-scanning .silhouette-path,
+.state-scanning .silhouette-eye,
+.state-scanning .silhouette-mouth {
+  stroke: var(--text-primary);
+}
+
+/* Success Checkmark & Error Cross */
+.faceid-checkmark,
+.faceid-cross {
+  width: 52px;
+  height: 52px;
+}
+
+.success-circle,
+.error-circle {
+  fill: none;
+  stroke-width: 3.5;
+  stroke-dasharray: 150;
+  stroke-dashoffset: 150;
+  stroke-linecap: round;
+  animation: draw-circle 0.6s var(--ease-apple) forwards;
+}
+
+.success-circle {
+  stroke: var(--status-success);
+}
+
+.error-circle {
+  stroke: var(--status-error);
+}
+
+.success-path {
+  fill: none;
+  stroke: var(--status-success);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+  animation: draw-check 0.4s var(--ease-apple) 0.3s forwards;
+}
+
+.error-path {
+  fill: none;
+  stroke: var(--status-error);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+  animation: draw-cross 0.4s var(--ease-apple) 0.3s forwards;
+}
+
+/* Status Text below */
+.faceid-status-text {
+  text-align: center;
+}
+
+.faceid-title {
+  font-size: var(--text-base);
+  font-weight: 700;
+  margin-bottom: var(--space-1);
+  letter-spacing: -0.3px;
+  transition: var(--transition-all);
+}
+
+.faceid-subtitle {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 240px;
+  margin: 0 auto;
+}
+
+/* Minimalist Demo Console */
+.faceid-demo-bar {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-5);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  box-shadow: var(--shadow-sm);
+  max-width: 360px;
 }
 
 .demo-btn {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.6);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
   padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-family: inherit;
+  border-radius: var(--radius-xs);
+  transition: var(--transition-all);
+  text-transform: uppercase;
 }
 
 .demo-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffffff;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .demo-btn.active {
-  background: rgba(var(--btn-color-rgb), 0.15);
-  border-color: rgba(var(--btn-color-rgb), 0.4);
-  color: rgb(var(--btn-color-rgb));
-  box-shadow: 0 0 10px rgba(var(--btn-color-rgb), 0.15);
+  background: var(--text-primary);
+  color: var(--bg-app-solid);
 }
 
-/* Keyframes definitions */
-@keyframes pulse-ring {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(var(--state-color-rgb), 0.22),
-                0 0 15px 0 rgba(var(--state-color-rgb), 0.08);
+/* Animation Keyframes */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
   }
-  50% {
-    transform: scale(1.015);
-    box-shadow: 0 0 0 12px rgba(var(--state-color-rgb), 0),
-                0 0 25px 4px rgba(var(--state-color-rgb), 0.18);
-  }
-}
-
-@keyframes rotate-hub {
-  100% {
+  to {
     transform: rotate(360deg);
   }
 }
 
-@keyframes laser-sweep {
+@keyframes pulse-ring {
   0%, 100% {
-    top: 5%;
-    opacity: 0.25;
+    transform: scale(1);
+    opacity: 0.5;
   }
   50% {
-    top: 92%;
-    opacity: 1;
+    transform: scale(1.04);
+    opacity: 0.9;
   }
 }
 
-@keyframes stroke {
-  100% {
+@keyframes pulse-face {
+  0%, 100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes sweep {
+  0%, 100% {
+    transform: translateY(-10px) scale(0.9);
+    opacity: 0;
+  }
+  50% {
+    transform: translateY(10px) scale(1.05);
+    opacity: 0.4;
+  }
+}
+
+@keyframes draw-circle {
+  to {
     stroke-dashoffset: 0;
   }
 }
 
-@keyframes scale-in {
-  0% {
-    transform: scale(0.6);
-    opacity: 0;
+@keyframes draw-check {
+  to {
+    stroke-dashoffset: 0;
   }
-  100% {
-    transform: scale(1);
-    opacity: 1;
+}
+
+@keyframes draw-cross {
+  to {
+    stroke-dashoffset: 0;
   }
 }

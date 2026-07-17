@@ -3,102 +3,102 @@ import './FaceAuthentication.css';
 
 const STATUS_DETAILS = {
   INITIALIZING: {
-    title: "System Initializing",
-    subtitle: "Loading neural network models...",
+    title: "Face ID Initializing",
+    subtitle: "Setting up secure camera stream...",
     class: "state-initializing",
-    colorRgb: "245, 158, 11" // Amber
+    color: "var(--text-muted)"
   },
   READY: {
-    title: "Ready to Scan",
-    subtitle: "Align your face within the frame",
+    title: "Face ID",
+    subtitle: "Position your face in front of the camera",
     class: "state-ready",
-    colorRgb: "59, 130, 246" // Blue
+    color: "var(--text-primary)"
   },
   SCANNING: {
     title: "Scanning Face",
-    subtitle: "Analyzing facial geometry details...",
+    subtitle: "Analyzing unique facial characteristics...",
     class: "state-scanning",
-    colorRgb: "6, 182, 212" // Cyan
+    color: "var(--text-primary)"
   },
   VERIFYING: {
-    title: "Verifying Identity",
-    subtitle: "Matching embeddings with database...",
+    title: "Authenticating",
+    subtitle: "Verifying credentials with database...",
     class: "state-verifying",
-    colorRgb: "139, 92, 246" // Purple
+    color: "var(--text-primary)"
   },
   SUCCESS: {
-    title: "Verification Successful",
-    subtitle: "Welcome back! Access granted.",
+    title: "Unlocked",
+    subtitle: "Identity successfully verified",
     class: "state-success",
-    colorRgb: "16, 185, 129" // Emerald Green
+    color: "var(--status-success)"
   },
   UNKNOWN_USER: {
-    title: "Access Denied",
-    subtitle: "Face not recognized in the system.",
+    title: "Not Recognized",
+    subtitle: "Face matching profile not found",
     class: "state-unknown",
-    colorRgb: "239, 68, 68" // Crimson Red
+    color: "var(--status-error)"
   }
 };
 
-function StatusText({ title, subtitle }) {
+function StatusText({ title, subtitle, state }) {
+  const current = STATUS_DETAILS[state] || STATUS_DETAILS.READY;
   return (
-    <div className="status-text-container">
-      <h3 className="status-title">{title}</h3>
-      <p className="status-subtitle">{subtitle}</p>
+    <div className="faceid-status-text">
+      <h3 className="faceid-title" style={{ color: current.color }}>
+        {title}
+      </h3>
+      <p className="faceid-subtitle">{subtitle}</p>
     </div>
   );
 }
 
 function ScannerAnimation({ state }) {
-  const currentStatus = STATUS_DETAILS[state] || STATUS_DETAILS.READY;
-  
   return (
-    <div className="scanner-container">
-      <div className="scanner-corner top-left" />
-      <div className="scanner-corner top-right" />
-      <div className="scanner-corner bottom-left" />
-      <div className="scanner-corner bottom-right" />
+    <div className={`faceid-scanner-box state-${state.toLowerCase()}`}>
+      {/* Restored Single Premium Ring SVG structure */}
+      <div className="faceid-ring">
+        <svg viewBox="0 0 100 100" className="faceid-ring-svg">
+          <circle cx="50" cy="50" r="46" className="faceid-ring-bg" />
+          <circle cx="50" cy="50" r="46" className="faceid-ring-active" />
+        </svg>
+      </div>
 
-      <div className="scanner-frame">
-        <div className="scanner-grid" />
-        
-        {(state === 'INITIALIZING' || state === 'VERIFYING') && (
-          <div className="scanner-spinner" />
-        )}
+      {/* Sweep Laser Effect */}
+      <div className="faceid-laser-sweep" />
 
-        {state === 'SCANNING' && (
-          <div className="scanner-laser" />
-        )}
-
+      {/* Central Visual Graphic */}
+      <div className="faceid-center-graphic">
         {state === 'SUCCESS' && (
-          <div className="scanner-result success-mark">
-            <svg viewBox="0 0 52 52" style={{ width: '100%', height: '100%' }}>
-              <circle className="checkmark-circle" cx="26" cy="26" r="25" fill="none" />
-              <path className="checkmark-check" fill="none" d="M14.1 27.2l7.1 7.2 16.7-16.8" />
+          /* Checkmark Drawing */
+          <div className="faceid-checkmark">
+            <svg viewBox="0 0 52 52">
+              <circle cx="26" cy="26" r="23" className="success-circle" />
+              <path d="M16 27 l7 7 l14 -14" className="success-path" />
             </svg>
           </div>
         )}
 
         {state === 'UNKNOWN_USER' && (
-          <div className="scanner-result error-mark">
-            <svg viewBox="0 0 52 52" style={{ width: '100%', height: '100%' }}>
-              <circle className="cross-circle" cx="26" cy="26" r="25" fill="none" />
-              <path className="cross-line-1" fill="none" d="M16 16 L36 36" />
-              <path className="cross-line-2" fill="none" d="M36 16 L16 36" />
+          /* Cross/Warning Drawing */
+          <div className="faceid-cross">
+            <svg viewBox="0 0 52 52">
+              <circle cx="26" cy="26" r="23" className="error-circle" />
+              <path d="M17 17 L35 35 M35 17 L17 35" className="error-path" />
             </svg>
           </div>
         )}
 
         {state !== 'SUCCESS' && state !== 'UNKNOWN_USER' && (
-          <div className="scanner-silhouette">
-            <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%' }}>
+          /* Face Silhouette */
+          <div className="faceid-silhouette">
+            <svg viewBox="0 0 100 100" className="silhouette-svg">
               <path 
-                d="M50 16 C38 16, 29 26, 29 39 C29 53, 39 61, 41 67 C39 71, 24 73, 19 86 L81 86 C76 73, 61 71, 59 67 C61 61, 71 53, 71 39 C71 26, 62 16, 50 16 Z" 
-                fill="none" 
-                stroke={`rgb(${currentStatus.colorRgb})`} 
-                strokeWidth="2"
-                style={{ transition: 'stroke 0.4s ease', opacity: 0.35 }}
+                d="M50 20 C38 20, 30 28, 30 40 C30 52, 38 60, 40 65 C39 69, 25 71, 20 82 L80 82 C75 71, 61 69, 60 65 C62 60, 70 52, 70 40 C70 28, 62 20, 50 20 Z" 
+                className="silhouette-path"
               />
+              <circle cx="42" cy="40" r="2" className="silhouette-eye" />
+              <circle cx="58" cy="40" r="2" className="silhouette-eye" />
+              <path d="M 45 52 Q 50 56 55 52" className="silhouette-mouth" />
             </svg>
           </div>
         )}
@@ -119,42 +119,36 @@ export default function FaceAuthentication({ state: suppliedState }) {
   const currentStatus = STATUS_DETAILS[activeState] || STATUS_DETAILS.READY;
 
   return (
-    <div className="face-auth-wrapper">
-      <div 
-        className={`face-auth-card state-${activeState.toLowerCase()}`} 
-        style={{ '--state-color-rgb': currentStatus.colorRgb }}
-      >
-        <div className="face-auth-glow" />
-        
-        <div className="face-auth-header">
-          <div className="face-auth-badge">Secure Biometric</div>
-          <h2 className="face-auth-title">Biometric Lock</h2>
+    <div className="faceid-container">
+      <div className={`faceid-card ${currentStatus.class}`}>
+        <div className="faceid-header-badge">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="none" stroke="currentColor" strokeWidth="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" fill="none" stroke="currentColor" strokeWidth="2" />
+          </svg>
+          Secure Auth
         </div>
-
-        <div className="face-auth-body">
+        
+        <div className="faceid-body">
           <ScannerAnimation state={activeState} />
         </div>
 
-        <div className="face-auth-footer">
-          <StatusText title={currentStatus.title} subtitle={currentStatus.subtitle} />
+        <div className="faceid-footer">
+          <StatusText title={currentStatus.title} subtitle={currentStatus.subtitle} state={activeState} />
         </div>
       </div>
 
-      {/* Presentational Demo Controller Console for reference and quick testing */}
-      <div className="face-auth-demo-bar">
-        {Object.keys(STATUS_DETAILS).map((stateKey) => {
-          const detail = STATUS_DETAILS[stateKey];
-          return (
-            <button
-              key={stateKey}
-              onClick={() => setActiveState(stateKey)}
-              className={`demo-btn ${activeState === stateKey ? 'active' : ''}`}
-              style={{ '--btn-color-rgb': detail.colorRgb }}
-            >
-              {stateKey}
-            </button>
-          );
-        })}
+      {/* Modern minimal Monochrome Demo Toggle Bar */}
+      <div className="faceid-demo-bar">
+        {Object.keys(STATUS_DETAILS).map((stateKey) => (
+          <button
+            key={stateKey}
+            onClick={() => setActiveState(stateKey)}
+            className={`demo-btn ${activeState === stateKey ? 'active' : ''}`}
+          >
+            {stateKey.substring(0, 4)}
+          </button>
+        ))}
       </div>
     </div>
   );

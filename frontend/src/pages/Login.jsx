@@ -4,6 +4,8 @@ import { useApi } from '../hooks/useApi';
 import { authServices } from '../services/authServices';
 import CameraCapture from '../components/CameraCapture';
 import FaceAuthentication from '../components/FaceAuthentication';
+import ThemeToggle from '../components/ThemeToggle';
+import { AlertCircle } from 'lucide-react';
 
 export default function Login() {
   const cameraRef = useRef(null);
@@ -42,6 +44,11 @@ export default function Login() {
       if (result.data && result.data.authenticated) {
         setAuthState('SUCCESS');
         
+        // Extract and store user's first name
+        const fullName = result.data.user?.name || 'Guest';
+        const firstName = fullName.split(' ')[0];
+        localStorage.setItem('firstName', firstName);
+        
         // Let the user appreciate the green success animation briefly, then transition
         setTimeout(() => {
           navigate('/dashboard');
@@ -53,7 +60,6 @@ export default function Login() {
     }
   };
 
-
   const handleCameraError = (err) => {
     setAuthState('INITIALIZING');
     setErrorMessage(`Webcam Error: ${err.message}. Please click the button below to grant permission.`);
@@ -62,7 +68,6 @@ export default function Login() {
   const handleRetryScan = () => {
     setErrorMessage(null);
     setAuthState('INITIALIZING');
-    // Incrementing key forces CameraCapture to remount and request access again
     setCameraKey((prev) => prev + 1);
   };
 
@@ -71,95 +76,135 @@ export default function Login() {
   };
 
   return (
-    <div style={styles.pageContainer}>
-      {/* Invisible video hardware controller */}
-      <CameraCapture 
-        key={cameraKey}
-        ref={cameraRef} 
-        onReady={handleCameraReady} 
-        onError={handleCameraError} 
-      />
+    <div style={styles.container}>
+      <div style={styles.themeToggleWrapper}>
+        <ThemeToggle />
+      </div>
 
-      {/* Futuristic centered biometric UI card */}
-      <FaceAuthentication state={authState} />
+      <div style={styles.contentWrap}>
+        <header style={styles.header}>
+          <h1 style={styles.headerTitle}>Biometric Login</h1>
+          <p style={styles.subtitle}>Unlock your Surge account with Face ID</p>
+        </header>
 
-      {/* Event-driven alert alerts and user recovery controls */}
-      {errorMessage && (
-        <div style={styles.errorAlert}>
-          {errorMessage}
-        </div>
-      )}
+        {/* Headless video capture */}
+        <CameraCapture 
+          key={cameraKey}
+          ref={cameraRef} 
+          onReady={handleCameraReady} 
+          onError={handleCameraError} 
+        />
 
-      <div style={styles.actionContainer}>
-        {authState === 'UNKNOWN_USER' && (
-          <>
+        {/* FaceID UI Card */}
+        <FaceAuthentication state={authState} />
+
+        {/* Error alerts */}
+        {errorMessage && (
+          <div style={styles.errorAlert}>
+            <AlertCircle size={15} style={{ marginRight: '8px', flexShrink: 0 }} />
+            {errorMessage}
+          </div>
+        )}
+
+        {/* User recovery controls */}
+        <div style={styles.actionContainer}>
+          {authState === 'UNKNOWN_USER' && (
+            <>
+              <button onClick={handleRetryScan} style={styles.actionBtn}>
+                Try Scan Again
+              </button>
+              <button onClick={handleRegisterRedirect} style={{ ...styles.actionBtn, ...styles.registerBtn }}>
+                Register Profile
+              </button>
+            </>
+          )}
+
+          {errorMessage && authState === 'INITIALIZING' && (
             <button onClick={handleRetryScan} style={styles.actionBtn}>
-              Try Scan Again
+              Grant Camera Access
             </button>
-            <button onClick={handleRegisterRedirect} style={{ ...styles.actionBtn, ...styles.registerBtn }}>
-              Register Biometric Profile
-            </button>
-          </>
-        )}
-
-        {errorMessage && authState === 'INITIALIZING' && (
-          <button onClick={handleRetryScan} style={styles.actionBtn}>
-            Grant Camera Access
-          </button>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-// Centered viewport page wrapper
 const styles = {
-  pageContainer: {
+  container: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: '100vh',
-    background: 'radial-gradient(circle at center, #0f172a 0%, #020617 100%)',
-    padding: '24px',
-    fontFamily: "'Outfit', 'Inter', -apple-system, sans-serif",
-    overflow: 'hidden'
+    background: 'var(--bg-app)',
+    padding: 'var(--space-5)',
+    transition: 'background var(--dur-normal) var(--ease-apple), color var(--dur-normal) var(--ease-apple)',
+    position: 'relative',
+  },
+  themeToggleWrapper: {
+    position: 'absolute',
+    top: 'var(--space-5)',
+    right: 'var(--space-5)',
+  },
+  contentWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: '400px',
+    animation: 'fadeIn var(--dur-normal) var(--ease-apple)',
+  },
+  header: {
+    textAlign: 'center',
+    marginBottom: 'var(--space-6)',
+  },
+  headerTitle: {
+    fontSize: 'var(--text-2xl)',
+    fontWeight: '800',
+    color: 'var(--text-primary)',
+    letterSpacing: '-1px',
+    marginBottom: 'var(--space-1)',
+  },
+  subtitle: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-secondary)',
   },
   errorAlert: {
-    marginTop: '24px',
-    maxWidth: '380px',
-    background: 'rgba(239, 68, 68, 0.08)',
-    border: '1px solid rgba(239, 68, 68, 0.25)',
-    color: '#ef4444',
-    padding: '12px 18px',
-    borderRadius: '12px',
-    fontSize: '0.85rem',
-    textAlign: 'center',
-    lineHeight: '1.4'
+    display: 'flex',
+    alignItems: 'center',
+    marginTop: 'var(--space-5)',
+    width: '100%',
+    background: 'rgba(239, 68, 68, 0.05)',
+    border: '1px solid rgba(239, 68, 68, 0.15)',
+    color: 'var(--status-error)',
+    padding: '12px var(--space-4)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--text-xs)',
+    lineHeight: '1.5',
   },
   actionContainer: {
     display: 'flex',
     gap: '12px',
-    marginTop: '20px',
+    marginTop: 'var(--space-5)',
     width: '100%',
-    maxWidth: '380px',
-    justifyContent: 'center'
   },
   actionBtn: {
-    background: 'rgba(59, 130, 246, 0.15)',
-    border: '1px solid rgba(59, 130, 246, 0.4)',
-    color: '#3b82f6',
-    padding: '10px 20px',
-    borderRadius: '12px',
-    fontSize: '0.85rem',
+    flex: 1,
+    background: 'var(--text-primary)',
+    border: '1px solid var(--text-primary)',
+    color: 'var(--bg-card)',
+    padding: '11px var(--space-4)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--text-sm)',
     fontWeight: '600',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
-    outline: 'none'
+    transition: 'var(--transition-all)',
+    textAlign: 'center',
+    boxShadow: 'var(--shadow-sm)',
   },
   registerBtn: {
-    background: 'rgba(16, 185, 129, 0.15)',
-    border: '1px solid rgba(16, 185, 129, 0.4)',
-    color: '#10b981'
+    background: 'var(--bg-card)',
+    border: '1px solid var(--border-medium)',
+    color: 'var(--text-primary)',
   }
 };

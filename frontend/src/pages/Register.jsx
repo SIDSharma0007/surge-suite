@@ -4,6 +4,8 @@ import { useApi } from '../hooks/useApi';
 import { authServices } from '../services/authServices';
 import CameraCapture from '../components/CameraCapture';
 import FaceAuthentication from '../components/FaceAuthentication';
+import ThemeToggle from '../components/ThemeToggle';
+import { AlertCircle } from 'lucide-react';
 
 export default function Register() {
   const cameraRef = useRef(null);
@@ -76,7 +78,6 @@ export default function Register() {
     }
   };
 
-
   const handleRetryScan = () => {
     setErrorMessage(null);
     setAuthState('INITIALIZING');
@@ -88,140 +89,192 @@ export default function Register() {
   };
 
   return (
-    <div style={styles.pageContainer}>
-      {/* Invisible video hardware controller */}
-      <CameraCapture 
-        key={cameraKey}
-        ref={cameraRef} 
-        onReady={handleCameraReady} 
-        onError={handleCameraError} 
-      />
-
-      {/* Centered card interface */}
-      <div style={styles.cardWrapper}>
-        <FaceAuthentication state={authState} />
-
-        {authState === 'READY' && (
-          <form onSubmit={handleRegister} style={styles.formContainer}>
-            <input
-              type="text"
-              placeholder="Enter Full Name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              style={styles.textInput}
-              required
-            />
-            <button type="submit" style={styles.submitBtn}>
-              Register Biometric Profile
-            </button>
-          </form>
-        )}
+    <div style={styles.container}>
+      <div style={styles.themeToggleWrapper}>
+        <ThemeToggle />
       </div>
 
-      {errorMessage && (
-        <div style={styles.errorAlert}>
-          {errorMessage}
-        </div>
-      )}
+      <div style={styles.contentWrap}>
+        <header style={styles.header}>
+          <h1 style={styles.headerTitle}>Biometric Register</h1>
+          <p style={styles.subtitle}>Create a new secure facial profile</p>
+        </header>
 
-      <div style={styles.actionContainer}>
-        {errorMessage && authState === 'INITIALIZING' && (
-          <button onClick={handleRetryScan} style={styles.actionBtn}>
-            Grant Camera Access
-          </button>
+        {/* Headless video capture */}
+        <CameraCapture 
+          key={cameraKey}
+          ref={cameraRef} 
+          onReady={handleCameraReady} 
+          onError={handleCameraError} 
+        />
+
+        <div style={styles.cardWrapper}>
+          <FaceAuthentication state={authState} />
+
+          {authState === 'READY' && (
+            <form onSubmit={handleRegister} style={styles.formContainer}>
+              <div style={styles.inputWrapper}>
+                <input
+                  type="text"
+                  placeholder="Enter Full Name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  style={styles.textInput}
+                  required
+                />
+              </div>
+              <button type="submit" style={styles.submitBtn}>
+                Register Profile
+              </button>
+            </form>
+          )}
+        </div>
+
+        {/* Error alerts */}
+        {errorMessage && (
+          <div style={styles.errorAlert}>
+            <AlertCircle size={15} style={{ marginRight: '8px', flexShrink: 0 }} />
+            {errorMessage}
+          </div>
         )}
-        <button onClick={handleLoginRedirect} style={{ ...styles.actionBtn, ...styles.loginBtn }}>
-          Back to Login
-        </button>
+
+        <div style={styles.actionContainer}>
+          {errorMessage && authState === 'INITIALIZING' && (
+            <button onClick={handleRetryScan} style={styles.actionBtn}>
+              Grant Camera Access
+            </button>
+          )}
+          <button onClick={handleLoginRedirect} style={{ ...styles.actionBtn, ...styles.loginBtn }}>
+            Back to Login
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// Styling parameters
 const styles = {
-  pageContainer: {
+  container: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: '100vh',
-    background: 'radial-gradient(circle at center, #0f172a 0%, #020617 100%)',
-    padding: '24px',
-    fontFamily: "'Outfit', 'Inter', -apple-system, sans-serif",
-    overflow: 'hidden'
+    background: 'var(--bg-app)',
+    padding: 'var(--space-5)',
+    transition: 'background var(--dur-normal) var(--ease-apple), color var(--dur-normal) var(--ease-apple)',
+    position: 'relative',
+  },
+  themeToggleWrapper: {
+    position: 'absolute',
+    top: 'var(--space-5)',
+    right: 'var(--space-5)',
+  },
+  contentWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: '400px',
+    animation: 'fadeIn var(--dur-normal) var(--ease-apple)',
+  },
+  header: {
+    textAlign: 'center',
+    marginBottom: 'var(--space-6)',
+  },
+  headerTitle: {
+    fontSize: 'var(--text-2xl)',
+    fontWeight: '800',
+    color: 'var(--text-primary)',
+    letterSpacing: '-1px',
+    marginBottom: 'var(--space-1)',
+  },
+  subtitle: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-secondary)',
   },
   cardWrapper: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: '24px'
+    width: '100%',
+    gap: '20px'
   },
   formContainer: {
     display: 'flex',
     flexDirection: 'column',
     gap: '12px',
     width: '100%',
-    maxWidth: '380px'
+    maxWidth: '360px'
+  },
+  inputWrapper: {
+    width: '100%',
+    background: 'var(--bg-input)',
+    border: '1px solid var(--border-medium)',
+    borderRadius: 'var(--radius-md)',
+    padding: '12px var(--space-4)',
+    boxShadow: 'var(--shadow-sm)',
+    transition: 'var(--transition-all)',
+    display: 'flex',
+    alignItems: 'center',
   },
   textInput: {
-    background: 'rgba(15, 23, 42, 0.6)',
-    border: '1px solid rgba(255, 255, 255, 0.08)',
-    borderRadius: '12px',
-    padding: '12px 16px',
-    color: '#ffffff',
-    fontSize: '0.9rem',
+    width: '100%',
+    fontSize: 'var(--text-sm)',
     outline: 'none',
-    transition: 'border-color 0.2s ease',
-    textAlign: 'center'
+    color: 'var(--text-primary)',
+    textAlign: 'center',
   },
   submitBtn: {
-    background: 'rgba(16, 185, 129, 0.15)',
-    border: '1px solid rgba(16, 185, 129, 0.4)',
-    color: '#10b981',
+    width: '100%',
+    background: 'var(--text-primary)',
+    border: '1px solid var(--text-primary)',
+    color: 'var(--bg-card)',
     padding: '12px',
-    borderRadius: '12px',
-    fontSize: '0.9rem',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--text-sm)',
     fontWeight: '600',
     cursor: 'pointer',
-    transition: 'all 0.2s ease',
-    outline: 'none'
+    transition: 'var(--transition-all)',
+    outline: 'none',
+    boxShadow: 'var(--shadow-sm)',
   },
   errorAlert: {
-    marginTop: '24px',
-    maxWidth: '380px',
-    background: 'rgba(239, 68, 68, 0.08)',
-    border: '1px solid rgba(239, 68, 68, 0.25)',
-    color: '#ef4444',
-    padding: '12px 18px',
-    borderRadius: '12px',
-    fontSize: '0.85rem',
-    textAlign: 'center',
-    lineHeight: '1.4'
+    display: 'flex',
+    alignItems: 'center',
+    marginTop: 'var(--space-5)',
+    width: '100%',
+    background: 'rgba(239, 68, 68, 0.05)',
+    border: '1px solid rgba(239, 68, 68, 0.15)',
+    color: 'var(--status-error)',
+    padding: '12px var(--space-4)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--text-xs)',
+    lineHeight: '1.5',
   },
   actionContainer: {
     display: 'flex',
     gap: '12px',
-    marginTop: '20px',
+    marginTop: 'var(--space-5)',
     width: '100%',
-    maxWidth: '380px',
-    justifyContent: 'center'
+    maxWidth: '360px',
   },
   actionBtn: {
-    background: 'rgba(255, 255, 255, 0.03)',
-    border: '1px solid rgba(255, 255, 255, 0.08)',
-    color: 'rgba(255, 255, 255, 0.6)',
-    padding: '10px 20px',
-    borderRadius: '12px',
-    fontSize: '0.85rem',
+    flex: 1,
+    background: 'var(--bg-card)',
+    border: '1px solid var(--border-light)',
+    color: 'var(--text-secondary)',
+    padding: '11px var(--space-lg)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--text-sm)',
     fontWeight: '600',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
-    outline: 'none'
+    transition: 'var(--transition-all)',
+    textAlign: 'center',
+    boxShadow: 'var(--shadow-sm)',
   },
   loginBtn: {
-    background: 'rgba(59, 130, 246, 0.15)',
-    border: '1px solid rgba(59, 130, 246, 0.4)',
-    color: '#3b82f6'
+    background: 'var(--bg-card)',
+    border: '1px solid var(--border-medium)',
+    color: 'var(--text-primary)',
   }
 };
