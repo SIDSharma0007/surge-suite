@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { authServices } from '../services/authServices';
@@ -22,17 +22,17 @@ export default function Register() {
   const { execute: registerFace } = useApi(authServices.register);
 
   // Synchronize initial camera load state with presentational UI
-  const handleCameraReady = (status) => {
+  const handleCameraReady = useCallback((status) => {
     if (status.ready && status.permissionGranted) {
       setErrorMessage(null);
       setAuthState('READY');
     }
-  };
+  }, []);
 
-  const handleCameraError = (err) => {
+  const handleCameraError = useCallback((err) => {
     setAuthState('INITIALIZING');
     setErrorMessage(`Webcam Error: ${err.message}. Please click the button below to grant permission.`);
-  };
+  }, []);
 
   const handleRegister = async (e) => {
     e.preventDefault();

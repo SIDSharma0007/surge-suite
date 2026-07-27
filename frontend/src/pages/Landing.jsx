@@ -2,6 +2,7 @@ import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authServices } from '../services/authServices';
 import { useApi } from '../hooks/useApi';
+import { useAuth } from '../context/AuthContext';
 import CameraCapture from '../components/CameraCapture';
 import FaceAuthentication from '../components/FaceAuthentication';
 import ThemeToggle from '../components/ThemeToggle';
@@ -10,6 +11,7 @@ import { WifiOff, AlertCircle } from 'lucide-react';
 function Landing() {
   const cameraRef = useRef(null);
   const navigate = useNavigate();
+  const { login } = useAuth();
 
   // Biometric flow states: INITIALIZING, SCANNING, VERIFYING, SUCCESS, UNKNOWN_USER
   const [authState, setAuthState] = useState('INITIALIZING');
@@ -40,10 +42,13 @@ function Landing() {
   }
 
   // Seamless trigger once the camera is initialized and buffers frames
-  const handleCameraReady = async (status) => {
+  const handleCameraReady = useCallback(async (status) => {
     if (status.ready && status.permissionGranted) {
       setErrorMessage(null);
       setAuthState('SCANNING');
+
+      // Add a 350ms camera sensor warmup delay for Chrome / Opera GX auto-exposure
+      await new Promise((resolve) => setTimeout(resolve, 350));
 
       // 1. Capture base64 frame from active feed
       const base64Image = cameraRef.current.capture();
@@ -62,10 +67,8 @@ function Landing() {
       if (result.data && result.data.authenticated) {
         setAuthState('SUCCESS');
         
-        // Extract and store user's first name
-        const fullName = result.data.user?.name || 'Guest';
-        const firstName = fullName.split(' ')[0];
-        localStorage.setItem('firstName', firstName);
+        // Start user session
+        login(result.data.user);
         
         // Let the user appreciate the green success animation briefly, then transition
         setTimeout(() => {
@@ -76,12 +79,12 @@ function Landing() {
         setErrorMessage(result.error || "Authentication failed. Face not recognized.");
       }
     }
-  };
+  }, [navigate, verifyFace, login]);
 
-  const handleCameraError = (err) => {
+  const handleCameraError = useCallback((err) => {
     setAuthState('INITIALIZING');
     setErrorMessage(`Webcam Error: ${err.message}. Please click the button below to grant permission.`);
-  };
+  }, []);
 
   const handleRetryScan = () => {
     setErrorMessage(null);

@@ -12,13 +12,19 @@ export const authServices = {
    * @returns {Promise} Axios response promise.
    */
   register(name, image, userId = null, deviceId = null, extraMetadata = {}) {
-    return api.post('/auth/register/', {
+    const payload = {
       name,
       image,
       user_id: userId,
       device_id: deviceId,
       extra_metadata: extraMetadata
+    };
+    console.log("[INSTRUMENTATION] authServices.register() payload:", {
+      keys: Object.keys(payload),
+      imageLength: image ? image.length : 0,
+      payloadJSONSize: JSON.stringify(payload).length
     });
+    return api.post('/auth/register/', payload);
   },
 
   /**
@@ -29,10 +35,16 @@ export const authServices = {
    * @returns {Promise} Axios response promise.
    */
   verify(image, deviceId = null) {
-    return api.post('/auth/verify/', {
+    const payload = {
       image,
       device_id: deviceId
+    };
+    console.log("[INSTRUMENTATION] authServices.verify() payload:", {
+      keys: Object.keys(payload),
+      imageLength: image ? image.length : 0,
+      payloadJSONSize: JSON.stringify(payload).length
     });
+    return api.post('/auth/verify/', payload);
   },
 
   /**

@@ -20,10 +20,13 @@ def get_face_embeddings(img):
         if confidence is None:
             confidence = 1.0
             
+        print(f"[INSTRUMENTATION] get_face_embeddings() evaluation - face confidence: {confidence}, threshold: {config.FACE_DETECTION_CONFIDENCE}")
         if confidence > config.FACE_DETECTION_CONFIDENCE:
             results.append({
                 'embedding': rep['embedding'],
                 'box': rep['facial_area']
             })
+        else:
+            print(f"[INSTRUMENTATION] Face filtered out due to low confidence: {confidence} <= {config.FACE_DETECTION_CONFIDENCE}")
             
     return results

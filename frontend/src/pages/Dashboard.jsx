@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
 import { 
   LayoutGrid, 
@@ -27,12 +28,14 @@ export default function Dashboard() {
   const [workspaces, setWorkspaces] = useState([]);
   const [pinnedFiles, setPinnedFiles] = useState([]);
 
-  const [firstName, setFirstName] = useState(() => {
-    return localStorage.getItem('firstName') || 'Guest';
-  });
+  const { currentUser, logout } = useAuth();
+
+  const firstName = currentUser?.name 
+    ? currentUser.name.split(' ')[0] 
+    : (localStorage.getItem('firstName') || 'Guest');
 
   const handleLogout = () => {
-    localStorage.removeItem('firstName');
+    logout();
     navigate('/');
   };
 

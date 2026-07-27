@@ -17,23 +17,30 @@ def register_face_from_image(name, img, user_id=None, device_id=None, extra_meta
         tuple: (registered_record, error_message)
     """
     if img is None:
+        print("[INSTRUMENTATION] register_face_from_image failed: img is None.")
         return None, "Invalid image data."
         
     try:
         faces = get_face_embeddings(img)
     except Exception as e:
+        print(f"[INSTRUMENTATION] register_face_from_image failed: Exception during get_face_embeddings: {str(e)}")
         return None, f"Face detection failed: {str(e)}"
         
     if not faces:
+        print("[INSTRUMENTATION] register_face_from_image failed: No face detected in the image.")
         return None, "No face detected in image."
     if len(faces) > 1:
+        print(f"[INSTRUMENTATION] register_face_from_image failed: Multiple faces detected: {len(faces)}")
         return None, "Multiple faces detected in image. Please ensure only one face is visible."
         
     embedding = faces[0]['embedding']
     
     # Check for duplicate registration
-    existing = find_best_match(embedding, load_all_faces())
+    all_faces = load_all_faces()
+    print(f"[INSTRUMENTATION] Checking duplicate registration against {len(all_faces)} registered faces.")
+    existing = find_best_match(embedding, all_faces)
     if existing["is_match"]:
+        print(f"[INSTRUMENTATION] register_face_from_image failed: Duplicate face with {existing['name']} (distance/score: {existing.get('distance')})")
         return None, f"Face already registered under user: {existing['name']}."
         
     # Save face embedding to MongoDB/JSON fallback
@@ -46,8 +53,10 @@ def register_face_from_image(name, img, user_id=None, device_id=None, extra_meta
     )
     
     if not record:
+        print("[INSTRUMENTATION] register_face_from_image failed: Failed to write to DB.")
         return None, "Failed to save face record to the database."
         
+    print(f"[INSTRUMENTATION] register_face_from_image succeeded for {name}.")
     return record, None
 
 def verify_face_from_image(img, device_id=None):
@@ -62,6 +71,7 @@ def verify_face_from_image(img, device_id=None):
         dict: Standard result dictionary conforming to success/failure structure.
     """
     if img is None:
+        print("[INSTRUMENTATION] verify_face_from_image failed: img is None.")
         return {
             "authenticated": False,
             "reason": "Invalid image data."
@@ -70,12 +80,14 @@ def verify_face_from_image(img, device_id=None):
     try:
         faces = get_face_embeddings(img)
     except Exception as e:
+        print(f"[INSTRUMENTATION] verify_face_from_image failed: Exception during get_face_embeddings: {str(e)}")
         return {
             "authenticated": False,
             "reason": f"Face detection failed: {str(e)}"
         }
         
     if not faces:
+        print("[INSTRUMENTATION] verify_face_from_image failed: No face detected in the image.")
         return {
             "authenticated": False,
             "reason": "Face not recognized"
@@ -85,14 +97,16 @@ def verify_face_from_image(img, device_id=None):
     
     # Load all registered faces
     registered_faces = load_all_faces()
+    print(f"[INSTRUMENTATION] Loaded {len(registered_faces)} registered faces for matching.")
     
     # Find closest match
     match_result = find_best_match(embedding, registered_faces)
+    print(f"[INSTRUMENTATION] Verification match result: {match_result}")
     
     if match_result['is_match']:
         # Update user's login timestamp
         update_login_timestamp(match_result['user_id'])
-        
+        print(f"[INSTRUMENTATION] verify_face_from_image succeeded for user {match_result['name']} (ID: {match_result['user_id']}).")
         return {
             "authenticated": True,
             "user": {
@@ -101,6 +115,7 @@ def verify_face_from_image(img, device_id=None):
             }
         }
     else:
+        print(f"[INSTRUMENTATION] verify_face_from_image failed: Face not recognized. Best distance: {match_result.get('distance')}")
         return {
             "authenticated": False,
             "reason": "Face not recognized"

@@ -5,6 +5,17 @@ const CameraCapture = forwardRef(({ onError, onReady }, ref) => {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const permissionGrantedRef = useRef(false);
+  const onErrorRef = useRef(onError);
+  const onReadyRef = useRef(onReady);
+
+  // Keep callback refs updated with the latest function references
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
 
   useEffect(() => {
     let isMounted = true;
@@ -33,8 +44,8 @@ const CameraCapture = forwardRef(({ onError, onReady }, ref) => {
       } catch (err) {
         permissionGrantedRef.current = false;
         console.error("CameraCapture initialization failed:", err);
-        if (onError) {
-          onError(err);
+        if (onErrorRef.current) {
+          onErrorRef.current(err);
         }
       }
     }
@@ -57,11 +68,11 @@ const CameraCapture = forwardRef(({ onError, onReady }, ref) => {
         streamRef.current = null;
       }
     };
-  }, [onError]);
+  }, []); // Only run once on mount
 
   const handleVideoCanPlay = () => {
-    if (onReady) {
-      onReady({
+    if (onReadyRef.current) {
+      onReadyRef.current({
         ready: true,
         permissionGranted: permissionGrantedRef.current
       });
@@ -82,6 +93,13 @@ const CameraCapture = forwardRef(({ onError, onReady }, ref) => {
         const video = videoRef.current;
         const canvas = canvasRef.current;
 
+        console.log("[INSTRUMENTATION] CameraCapture.capture() called");
+        if (video) {
+          console.log(`[INSTRUMENTATION] video.readyState: ${video.readyState}, video.videoWidth: ${video.videoWidth}, video.videoHeight: ${video.videoHeight}`);
+        } else {
+          console.log("[INSTRUMENTATION] video element is null!");
+        }
+
         if (!video || !canvas) {
           throw new Error("Video or Canvas ref is null during capture.");
         }
@@ -99,37 +117,49 @@ const CameraCapture = forwardRef(({ onError, onReady }, ref) => {
         canvas.height = video.videoHeight;
         
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/jpeg', 0.85);
+        const base64Image = canvas.toDataURL('image/jpeg', 0.85);
+
+        console.log(`[INSTRUMENTATION] Frame captured successfully. Base64 length: ${base64Image.length}`);
+        
+        // Save to window and localStorage
+        window.latestCapturedFrame = base64Image;
+        try {
+          localStorage.setItem('latestCapturedFrame', base64Image);
+          console.log("[INSTRUMENTATION] Saved captured frame to localStorage.");
+        } catch (e) {
+          console.error("[INSTRUMENTATION] Failed to save frame to localStorage:", e);
+        }
+
+        return base64Image;
       } catch (err) {
         console.error("CameraCapture capture failed:", err);
-        if (onError) {
-          onError(err);
+        if (onErrorRef.current) {
+          onErrorRef.current(err);
         }
         return null;
       }
     }
   }));
 
+  // Render the video and canvas off-screen instead of using display: none.
+  // This forces Chromium-based engines (Chrome/Opera GX) to decode and render the video frames.
   return (
-    <div style={{ display: 'none' }}>
+    <div style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', pointerEvents: 'none', top: '-1000px', left: '-1000px' }}>
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        style={{ display: 'none' }}
+        style={{ width: '100%', height: '100%' }}
         onCanPlay={handleVideoCanPlay}
       />
       <canvas
         ref={canvasRef}
-        style={{ display: 'none' }}
       />
     </div>
   );
 });
 
-
 CameraCapture.displayName = 'CameraCapture';
 
 export default CameraCapture;
-
