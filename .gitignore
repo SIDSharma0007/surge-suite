@@ -46,3 +46,7 @@ __pycache__/
 *.sqlite3
 *.sqlite
 *.db
+
+# Markdown references and summaries
+*.md
+

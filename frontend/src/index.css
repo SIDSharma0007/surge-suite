@@ -330,3 +330,23 @@ div[style*="profileBadge"]:hover {
   box-shadow: 0 0 0 3px var(--bg-focus-ring);
 }
 
+/* Dashboard Note Card and Row Hover Animations */
+.note-card-hover {
+  cursor: pointer;
+  transition: var(--transition-all) !important;
+}
+.note-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md) !important;
+  border-color: var(--border-medium) !important;
+}
+
+.note-row-hover {
+  cursor: pointer;
+  transition: var(--transition-all) !important;
+}
+.note-row-hover:hover {
+  background-color: var(--bg-hover) !important;
+}
+
+

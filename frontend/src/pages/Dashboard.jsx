@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
+import Notes from './Notes.jsx';
 import { 
   LayoutGrid, 
   Table, 
@@ -27,6 +28,76 @@ export default function Dashboard() {
   // Real-time states representing an empty workspace suite
   const [workspaces, setWorkspaces] = useState([]);
   const [pinnedFiles, setPinnedFiles] = useState([]);
+
+  // Manage frontend-only list of notes
+  const [notes, setNotes] = useState(() => {
+    const saved = localStorage.getItem('surge_notes');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error("Failed to parse local notes:", e);
+      }
+    }
+    return [
+      {
+        id: 'welcome-note',
+        title: 'Welcome to Surge Notes',
+        body: '<div>This is a premium monochrome notes writing workspace.</div><div>Feel free to format text, add lists, or insert links!</div>',
+        isPinned: false,
+        updatedAt: new Date().toISOString()
+      }
+    ];
+  });
+
+  const [activeNoteId, setActiveNoteId] = useState(null);
+
+  // Sync notes list to localStorage for persistence inside this milestone
+  const saveNotes = (updatedNotes) => {
+    setNotes(updatedNotes);
+    localStorage.setItem('surge_notes', JSON.stringify(updatedNotes));
+  };
+
+  const handleCreateNote = () => {
+    const newNote = {
+      id: `note-${Date.now()}`,
+      title: '',
+      body: '',
+      isPinned: false,
+      updatedAt: new Date().toISOString()
+    };
+    const updated = [newNote, ...notes];
+    saveNotes(updated);
+    setActiveNoteId(newNote.id);
+    setActiveTab('Notes');
+  };
+
+  const handleUpdateNote = (updatedNote) => {
+    const updated = notes.map(n => n.id === updatedNote.id ? { ...updatedNote, updatedAt: new Date().toISOString() } : n);
+    saveNotes(updated);
+  };
+
+  const handleTogglePinNote = (noteId) => {
+    const updated = notes.map(n => n.id === noteId ? { ...n, isPinned: !n.isPinned } : n);
+    saveNotes(updated);
+  };
+
+  const handleOpenNote = (noteId) => {
+    setActiveNoteId(noteId);
+    setActiveTab('Notes');
+  };
+
+  const getExcerpt = (htmlString) => {
+    if (!htmlString) return '';
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, 'text/html');
+      const text = doc.body.textContent || doc.body.innerText || '';
+      return text.length > 80 ? text.substring(0, 80) + '...' : text;
+    } catch (e) {
+      return '';
+    }
+  };
 
   const { currentUser, logout } = useAuth();
 
@@ -66,7 +137,7 @@ export default function Dashboard() {
           {[
             { name: 'Workspaces', icon: LayoutGrid },
             { name: 'Spreadsheets', icon: Table },
-            { name: 'Documents', icon: FileText },
+            { name: 'Notes', icon: FileText },
             { name: 'Shared Files', icon: FolderOpen },
             { name: 'Settings', icon: Settings }
           ].map((item) => {
@@ -111,7 +182,9 @@ export default function Dashboard() {
             <button onClick={() => setSidebarOpen(!sidebarOpen)} style={styles.hamburgerBtn}>
               <Menu size={18} />
             </button>
-            <span style={styles.pageTitleBreadcrumb}>Workspaces / <span style={{ color: 'var(--text-primary)' }}>Overview</span></span>
+            <span style={styles.pageTitleBreadcrumb}>
+              {activeTab === 'Notes' ? 'Notes' : activeTab} / <span style={{ color: 'var(--text-primary)' }}>Overview</span>
+            </span>
           </div>
 
           <div style={styles.headerRight}>
@@ -137,42 +210,73 @@ export default function Dashboard() {
                 {/* Main section: Workspaces and Files */}
                 <div style={styles.mainSection}>
                   
-                  {/* Pinned Documents Section */}
+                  {/* Pinned Notes Section */}
                   <section style={styles.section}>
                     <div style={styles.sectionHeader}>
                       <Pin size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
-                      <h3 style={styles.sectionTitle}>Pinned Documents</h3>
+                      <h3 style={styles.sectionTitle}>Pinned Notes</h3>
                     </div>
 
-                    {pinnedFiles.length > 0 ? (
-                      <div style={styles.grid}>
-                        {/* Render items */}
+                    {notes.filter(n => n.isPinned).length > 0 ? (
+                      <div style={styles.notesGrid}>
+                        {notes.filter(n => n.isPinned).map(note => (
+                          <div 
+                            key={note.id} 
+                            onClick={() => handleOpenNote(note.id)} 
+                            style={styles.noteCard}
+                            className="note-card-hover"
+                          >
+                            <div style={styles.noteCardHeader}>
+                              <h4 style={styles.noteCardTitle}>{note.title || 'Untitled Note'}</h4>
+                              <Pin size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                            </div>
+                            <p style={styles.noteCardExcerpt}>{getExcerpt(note.body) || 'No content'}</p>
+                            <span style={styles.noteCardDate}>{new Date(note.updatedAt).toLocaleDateString()}</span>
+                          </div>
+                        ))}
                       </div>
                     ) : (
                       <div style={styles.emptyCard}>
                         <Pin size={24} strokeWidth={1.5} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
-                        <h4 style={styles.emptyTitle}>No pinned documents</h4>
-                        <p style={styles.emptyText}>Pin important sheets or files to have them pinned here for quick access.</p>
+                        <h4 style={styles.emptyTitle}>No pinned notes</h4>
+                        <p style={styles.emptyText}>Pin important notes to have them pinned here for quick access.</p>
                       </div>
                     )}
                   </section>
 
-                  {/* Continue Working Section */}
+                  {/* Recent Notes Section */}
                   <section style={{ ...styles.section, marginTop: '32px' }}>
                     <div style={styles.sectionHeader}>
                       <Clock size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
-                      <h3 style={styles.sectionTitle}>Continue Working</h3>
+                      <h3 style={styles.sectionTitle}>Recent Notes</h3>
                     </div>
 
-                    {workspaces.length > 0 ? (
-                      <div style={styles.tableWrapper}>
-                        {/* Table */}
+                    {notes.length > 0 ? (
+                      <div style={styles.recentNotesList}>
+                        {[...notes].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).map((note, index, array) => (
+                          <div 
+                            key={note.id} 
+                            onClick={() => handleOpenNote(note.id)} 
+                            style={{
+                              ...styles.recentNoteRow,
+                              borderBottom: index === array.length - 1 ? 'none' : '1px solid var(--border-light)'
+                            }}
+                            className="note-row-hover"
+                          >
+                            <div style={styles.recentNoteLeft}>
+                              <FileText size={14} style={{ color: 'var(--text-muted)', marginRight: '12px' }} />
+                              <span style={styles.recentNoteTitle}>{note.title || 'Untitled Note'}</span>
+                            </div>
+                            <span style={styles.recentNoteExcerpt}>{getExcerpt(note.body) || 'No content'}</span>
+                            <span style={styles.recentNoteDate}>{new Date(note.updatedAt).toLocaleDateString()}</span>
+                          </div>
+                        ))}
                       </div>
                     ) : (
                       <div style={styles.emptyCard}>
                         <FolderPlus size={24} strokeWidth={1.5} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
-                        <h4 style={styles.emptyTitle}>No recent files found</h4>
-                        <p style={styles.emptyText}>Create a new workspace document or spreadsheet to begin working.</p>
+                        <h4 style={styles.emptyTitle}>No recent notes found</h4>
+                        <p style={styles.emptyText}>Create a new note to begin writing.</p>
                       </div>
                     )}
                   </section>
@@ -189,13 +293,18 @@ export default function Dashboard() {
                       <h4 style={styles.widgetTitle}>Quick Actions</h4>
                     </div>
                     <div style={styles.widgetBody}>
-                      <button style={styles.actionBtn}>
+                      <button onClick={handleCreateNote} style={styles.actionBtn} className="action-btn-hover">
                         <Plus size={14} style={{ marginRight: '8px' }} />
-                        Create New Document
+                        Create New Note
                       </button>
-                      <button style={{ ...styles.actionBtn, marginTop: '8px' }}>
+                      <button 
+                        style={{ ...styles.actionBtn, marginTop: '8px', cursor: 'not-allowed', opacity: 0.5 }} 
+                        disabled
+                        title="Spreadsheets are coming soon"
+                      >
                         <Table size={14} style={{ marginRight: '8px' }} />
                         Create New Spreadsheet
+                        <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: 'auto', fontWeight: '500', border: '1px solid var(--border-medium)', padding: '2px 4px', borderRadius: '4px' }}>Coming Soon</span>
                       </button>
                     </div>
                   </div>
@@ -222,11 +331,20 @@ export default function Dashboard() {
               </div>
 
             </div>
+          ) : activeTab === 'Notes' ? (
+            <Notes 
+              notes={notes}
+              activeNoteId={activeNoteId}
+              setActiveNoteId={setActiveNoteId}
+              onNewNote={handleCreateNote}
+              onUpdateNote={handleUpdateNote}
+              onTogglePin={handleTogglePinNote}
+            />
           ) : (
             <div style={styles.emptyTabPanel}>
               <FolderPlus size={36} strokeWidth={1.25} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
               <h3 style={styles.emptyPanelTitle}>{activeTab} Hub</h3>
-              <p style={styles.emptyPanelText}>Create a new document to start editing in this workspace tab.</p>
+              <p style={styles.emptyPanelText}>Create a new workspace item to start editing in this tab.</p>
             </div>
           )}
         </main>
@@ -530,5 +648,100 @@ const styles = {
     fontSize: 'var(--text-sm)',
     color: 'var(--text-muted)',
     maxWidth: '300px',
+  },
+  notesGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+    gap: '16px',
+    width: '100%',
+  },
+  noteCard: {
+    background: 'var(--bg-card)',
+    border: '1px solid var(--border-light)',
+    borderRadius: 'var(--radius-md)',
+    padding: '16px',
+    boxShadow: 'var(--shadow-sm)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    minHeight: '120px',
+  },
+  noteCardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: '8px',
+  },
+  noteCardTitle: {
+    fontSize: 'var(--text-sm)',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
+    margin: 0,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  noteCardExcerpt: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-secondary)',
+    margin: 0,
+    lineHeight: '1.4',
+    flex: 1,
+    display: '-webkit-box',
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  },
+  noteCardDate: {
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    fontWeight: '500',
+  },
+  recentNotesList: {
+    display: 'flex',
+    flexDirection: 'column',
+    background: 'var(--bg-card)',
+    border: '1px solid var(--border-light)',
+    borderRadius: 'var(--radius-lg)',
+    overflow: 'hidden',
+    boxShadow: 'var(--shadow-sm)',
+  },
+  recentNoteRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '14px 20px',
+    borderBottom: '1px solid var(--border-light)',
+    gap: '16px',
+  },
+  recentNoteLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    width: '200px',
+    flexShrink: 0,
+  },
+  recentNoteTitle: {
+    fontSize: 'var(--text-xs)',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  recentNoteExcerpt: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-secondary)',
+    flex: 1,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  recentNoteDate: {
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    fontWeight: '500',
+    width: '80px',
+    textAlign: 'right',
+    flexShrink: 0,
   }
 };
