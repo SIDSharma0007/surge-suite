@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
@@ -29,7 +29,17 @@ export default function Dashboard() {
   const [workspaces, setWorkspaces] = useState([]);
   const [pinnedFiles, setPinnedFiles] = useState([]);
 
-  // Manage frontend-only list of notes
+  // Helper to compute remaining days in the Trash Bin (max 30 days)
+  const getRemainingDays = (deletedAt) => {
+    if (!deletedAt) return 30;
+    const deletedDate = new Date(deletedAt);
+    const expiryDate = new Date(deletedDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const diffTime = expiryDate - new Date();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays > 0 ? diffDays : 0;
+  };
+
+  // Manage frontend-only list of active notes
   const [notes, setNotes] = useState(() => {
     const saved = localStorage.getItem('surge_notes');
     if (saved) {
@@ -45,18 +55,51 @@ export default function Dashboard() {
         title: 'Welcome to Surge Notes',
         body: '<div>This is a premium monochrome notes writing workspace.</div><div>Feel free to format text, add lists, or insert links!</div>',
         isPinned: false,
+        color: 'default',
+        tags: ['#welcome', '#guide'],
         updatedAt: new Date().toISOString()
       }
     ];
   });
 
+  // Manage frontend-only list of deleted notes (Trash Bin)
+  const [deletedNotes, setDeletedNotes] = useState(() => {
+    const saved = localStorage.getItem('surge_notes_bin');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error("Failed to parse local bin notes:", e);
+      }
+    }
+    return [];
+  });
+
   const [activeNoteId, setActiveNoteId] = useState(null);
 
-  // Sync notes list to localStorage for persistence inside this milestone
+  // Sync active notes to localStorage
   const saveNotes = (updatedNotes) => {
     setNotes(updatedNotes);
     localStorage.setItem('surge_notes', JSON.stringify(updatedNotes));
   };
+
+  // Sync bin notes to localStorage
+  const saveBinNotes = (updatedBinNotes) => {
+    setDeletedNotes(updatedBinNotes);
+    localStorage.setItem('surge_notes_bin', JSON.stringify(updatedBinNotes));
+  };
+
+  // Boot-time auto-purge for items older than 30 days
+  useEffect(() => {
+    const parsed = deletedNotes;
+    const pruned = parsed.filter(n => {
+      const daysLeft = getRemainingDays(n.deletedAt);
+      return daysLeft > 0;
+    });
+    if (pruned.length !== parsed.length) {
+      saveBinNotes(pruned);
+    }
+  }, []);
 
   const handleCreateNote = () => {
     const newNote = {
@@ -64,6 +107,8 @@ export default function Dashboard() {
       title: '',
       body: '',
       isPinned: false,
+      color: 'default',
+      tags: [],
       updatedAt: new Date().toISOString()
     };
     const updated = [newNote, ...notes];
@@ -80,6 +125,57 @@ export default function Dashboard() {
   const handleTogglePinNote = (noteId) => {
     const updated = notes.map(n => n.id === noteId ? { ...n, isPinned: !n.isPinned } : n);
     saveNotes(updated);
+  };
+
+  // Move note to trash bin (delete action)
+  const handleDeleteNote = (noteId) => {
+    const noteToDelete = notes.find(n => n.id === noteId);
+    if (!noteToDelete) return;
+
+    // Move to bin
+    const deletedNote = {
+      ...noteToDelete,
+      deletedAt: new Date().toISOString()
+    };
+    const updatedBin = [deletedNote, ...deletedNotes];
+    saveBinNotes(updatedBin);
+
+    // Remove from active notes
+    const updatedNotes = notes.filter(n => n.id !== noteId);
+    saveNotes(updatedNotes);
+
+    // Clear active selection
+    if (activeNoteId === noteId) {
+      setActiveNoteId(null);
+    }
+  };
+
+  // Restore note from trash bin
+  const handleRestoreNote = (noteId) => {
+    const noteToRestore = deletedNotes.find(n => n.id === noteId);
+    if (!noteToRestore) return;
+
+    const { deletedAt, ...restoredNote } = noteToRestore;
+    restoredNote.updatedAt = new Date().toISOString();
+
+    // Move back to active list
+    const updatedNotes = [restoredNote, ...notes];
+    saveNotes(updatedNotes);
+
+    // Remove from bin list
+    const updatedBin = deletedNotes.filter(n => n.id !== noteId);
+    saveBinNotes(updatedBin);
+  };
+
+  // Permanently delete a single note
+  const handlePermanentlyDeleteNote = (noteId) => {
+    const updatedBin = deletedNotes.filter(n => n.id !== noteId);
+    saveBinNotes(updatedBin);
+  };
+
+  // Empty the entire Trash Bin
+  const handleEmptyBin = () => {
+    saveBinNotes([]);
   };
 
   const handleOpenNote = (noteId) => {
@@ -334,11 +430,16 @@ export default function Dashboard() {
           ) : activeTab === 'Notes' ? (
             <Notes 
               notes={notes}
+              deletedNotes={deletedNotes}
               activeNoteId={activeNoteId}
               setActiveNoteId={setActiveNoteId}
               onNewNote={handleCreateNote}
               onUpdateNote={handleUpdateNote}
               onTogglePin={handleTogglePinNote}
+              onDeleteNote={handleDeleteNote}
+              onRestoreNote={handleRestoreNote}
+              onPermanentlyDeleteNote={handlePermanentlyDeleteNote}
+              onEmptyBin={handleEmptyBin}
             />
           ) : (
             <div style={styles.emptyTabPanel}>

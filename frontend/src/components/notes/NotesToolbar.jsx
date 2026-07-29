@@ -11,6 +11,7 @@ import {
 
 export default function NotesToolbar({ onFormat }) {
   const fileInputRef = useRef(null);
+  const savedRangeRef = useRef(null);
 
   // Prevent default mouse-down behavior so we do not lose text selection in contentEditable
   const handleButtonMouseDown = (e, command, value = null) => {
@@ -18,14 +19,69 @@ export default function NotesToolbar({ onFormat }) {
     onFormat(command, value);
   };
 
+  const handleLinkMouseDown = (e) => {
+    e.preventDefault(); // Prevent focus loss from editor
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      savedRangeRef.current = selection.getRangeAt(0).cloneRange();
+    }
+  };
+
   const handleLinkClick = (e) => {
     e.preventDefault();
-    const url = prompt('Enter link URL (e.g. https://google.com):');
-    if (url) {
-      // Simple validation prefix
-      const targetUrl = url.match(/^https?:\/\//i) ? url : `https://${url}`;
-      onFormat('createLink', targetUrl);
+    
+    let existingUrl = '';
+    const selection = window.getSelection();
+    
+    // Inspect if selection was nested inside an anchor tag
+    let node = selection ? selection.anchorNode : null;
+    while (node && node.nodeName !== 'A' && (!node.className || !node.className.includes('notes-body-editable'))) {
+      node = node.parentNode;
     }
+    if (node && node.nodeName === 'A') {
+      existingUrl = node.getAttribute('href') || '';
+    }
+    
+    const url = prompt('Enter link URL (leave empty to remove link):', existingUrl);
+    
+    // Restore selection range
+    if (savedRangeRef.current && selection) {
+      selection.removeAllRanges();
+      selection.addRange(savedRangeRef.current);
+    }
+    
+    // Apply link or unlink command
+    if (url === '') {
+      onFormat('unlink');
+    } else if (url !== null) {
+      const targetUrl = url.match(/^https?:\/\//i) ? url : `https://${url}`;
+      
+      const range = savedRangeRef.current;
+      if (range && range.collapsed) {
+        // If selection is collapsed (no highlighted text), insert visible anchor tag with link text
+        const anchor = document.createElement('a');
+        anchor.href = targetUrl;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.textContent = url;
+        
+        range.insertNode(anchor);
+        
+        // Move cursor to after the new anchor tag
+        const newRange = document.createRange();
+        newRange.setStartAfter(anchor);
+        newRange.setEndAfter(anchor);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+        
+        onFormat('insertHTML', ''); // Trigger state update
+      } else {
+        onFormat('createLink', targetUrl);
+      }
+    }
+    
+    // Clear saved range
+    savedRangeRef.current = null;
   };
 
   const handleImageClick = (e) => {
@@ -97,7 +153,8 @@ export default function NotesToolbar({ onFormat }) {
       </button>
       <button 
         className="notes-toolbar-btn toolbar-active" 
-        onMouseDown={handleLinkClick}
+        onMouseDown={handleLinkMouseDown}
+        onClick={handleLinkClick}
         title="Insert Link"
       >
         <Link size={16} />
