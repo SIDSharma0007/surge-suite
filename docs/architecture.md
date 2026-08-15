@@ -62,7 +62,7 @@ The computer vision logic resides in `backend/authentication/services/` and runs
 
 ## Current Persistence Mechanisms
 
-1. **Relational Database**: Django specifies SQLite (`db.sqlite3`) as the default database engine in `settings.py`. Currently, it only stores standard Django migration schemas and has no application tables.
+1. **Relational Database**: Django specifies PostgreSQL as the relational database engine in `settings.py`. Currently, it only stores standard Django migration schemas and has no application tables.
 2. **Document Database**: Face profiles (containing user metadata and embeddings) are saved to MongoDB. The MongoClient instance (`backend/database/connection.py`) reads connection strings from the environment.
 3. **Local JSON Fallback**: If the MongoDB connection fails, the application falls back to storing face profiles inside the `backend/authentication/services/registered_faces/` subdirectory, with one JSON file per registered user.
 
