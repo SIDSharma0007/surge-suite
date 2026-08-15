@@ -54,5 +54,23 @@ export const authServices = {
    */
   status() {
     return api.get('/auth/status/');
+  },
+
+  /**
+   * Terminate current server session.
+   * 
+   * @returns {Promise} Axios response promise.
+   */
+  logout() {
+    return api.post('/auth/logout/');
+  },
+
+  /**
+   * Retrieve current authenticated user details from server session.
+   * 
+   * @returns {Promise} Axios response promise.
+   */
+  me() {
+    return api.get('/auth/me/');
   }
 };

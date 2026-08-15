@@ -44,10 +44,12 @@ The frontend is a single-page application built on Vite and React (18.3.1).
 
 The backend is built with Django 5.1.6 (packaged dependencies specify Django 6.0.7) and Django REST Framework.
 - **Core App (`core`)**: Provides a basic online status verification endpoint (`/api/v1/status/`).
-- **Authentication App (`authentication`)**: Houses facial recognition endpoints:
-  - `POST /api/v1/auth/register/`: Registers a user's name and face embedding from a base64 encoded image.
-  - `POST /api/v1/auth/verify/`: Computes matching confidence for a base64 photo against database profiles.
-  - `GET /api/v1/auth/status/`: Returns online status and total registered profiles.
+- **Authentication App (`authentication`)**: Houses facial recognition and session endpoints:
+  - `POST /api/v1/auth/register/`: Registers a user's name and face embedding, creating a canonical Django `User` and a biometric face profile.
+  - `POST /api/v1/auth/verify/`: Verifies a base64 image, resolves it to a Django `User` (stable UUID as username), and logs them in server-side.
+  - `GET /api/v1/auth/status/`: Returns online status, registered face count, and sets the Django CSRF cookie.
+  - `POST /api/v1/auth/logout/`: Invalidate the Django session.
+  - `GET /api/v1/auth/me/`: Retrieve current authenticated user details from the session.
 - **Other Apps**: `users`, `workspace`, `notes`, `todo`, and `rag` are currently registered under Django's `INSTALLED_APPS` but contain empty configurations, empty models, and no routes.
 
 ### 3. Computer Vision & Face Authentication Pipeline

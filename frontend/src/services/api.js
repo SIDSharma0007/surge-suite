@@ -10,6 +10,9 @@ const getAuthToken = () => null; // e.g., () => localStorage.getItem('token');
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 10000, // 10 seconds timeout
+  withCredentials: true, // Send session cookies for cross-origin requests
+  xsrfCookieName: 'csrftoken', // Django CSRF cookie name
+  xsrfHeaderName: 'X-CSRFToken', // Django CSRF header name
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
