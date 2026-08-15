@@ -47,6 +47,12 @@ __pycache__/
 *.sqlite
 *.db
 
+# Face authentication database fallbacks and legacy files
+backend/authentication/services/registered_faces/
+backend/authentication/services/registered_faces.json
+
 # Markdown references and summaries
 *.md
+!docs/**/*.md
+!README.md
 
