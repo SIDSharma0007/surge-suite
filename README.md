@@ -1,148 +1,62 @@
 # Surge Suite
 
-Surge Suite is a face recognition-powered productivity platform that enables secure, passwordless authentication through facial biometrics. The application identifies registered users in real time and grants access to their personalized workspace without relying on conventional credentials.
+> **A workspace-native, human-in-the-loop agentic AI platform for getting real work done safely.**
 
-Built for both personal and shared environments, Surge Suite supports multiple registered users on a single device while ensuring complete separation of user data. When an unrecognized face is detected, the application initiates a registration process to create a new user profile and securely associate facial embeddings with that account.
+Surge Suite is a configurable digital workspace where people and teams can use AI agents to complete real-world tasks.
 
-The current release provides every authenticated user with a private workspace consisting of a notes application and a task management system. An integrated Retrieval-Augmented Generation (RAG) pipeline enables intelligent retrieval of notes and contextual assistance, making information easier to locate and utilize.
+Instead of acting like a normal chatbot that only answers questions, Surge Suite is designed to let an AI agent:
 
----
+- understand what a user wants
+- use trusted information belonging to their workspace
+- plan multi-step tasks
+- check permissions and policies
+- request human approval when required
+- use authorized external tools
+- verify the result
+- maintain a complete record of important actions
 
-## Features
+The goal is simple:
 
-- Face-based user registration and authentication
-- Passwordless login through real-time facial recognition
-- Personalized workspaces for individual users
-- Secure multi-user support on a single device
-- Private notes management
-- To-do list and task management
-- AI-assisted note retrieval using a Retrieval-Augmented Generation (RAG) pipeline
-- Automatic recognition of returning users
-- JSON-based storage fallback for improved resilience
-
----
-
-## Technology Stack
-
-### Frontend
-- React
-
-### Backend
-- Django
-- Django REST Framework
-
-### Database
-- MongoDB
-- JSON storage fallback
-
-### Computer Vision
-- OpenCV
-- MTCNN
-- RetinaFace
-- SSD
-
-### Artificial Intelligence
-- Retrieval-Augmented Generation (RAG)
+> **Move AI from "tell me how to do this" to "help me get this done — while keeping the right people in control."**
 
 ---
 
-## System Architecture
+## What Is Surge Suite?
 
-Surge Suite follows a client-server architecture consisting of a React frontend, a Django REST backend, MongoDB for persistent storage, and a computer vision pipeline responsible for authentication.
+Surge Suite treats an organization as a collection of independent **workspaces**.
 
-Upon launching the application, the webcam initializes and begins processing video frames. Facial detection is performed using OpenCV alongside MTCNN, RetinaFace, and SSD-based detection models. If a registered user is recognized, authentication is completed automatically and the corresponding workspace is loaded. If no matching profile is found, the user is prompted to register by providing a name and facial data.
+A workspace is a controlled environment containing:
 
-The backend exposes RESTful APIs responsible for authentication, workspace management, notes, tasks, and AI-powered retrieval. MongoDB stores user information and workspace data, while a JSON-based storage mechanism serves as a fallback when database connectivity is unavailable. The integrated RAG pipeline enables semantic retrieval of stored notes and contextual information.
+- Members
+- Roles
+- Permissions
+- Policies
+- Documents and knowledge
+- Enabled tools
+- Agent configuration
+- Approval rules
+- Action history
 
----
+For example, an organization could have:
 
-## Installation
-
-### Clone the Repository
-
-```bash
-git clone https://github.com/abhinavAryan47/surge-suite.git
-cd surge-suite
-```
-
-### Backend Setup
-
-```bash
-cd backend
-
-python -m venv venv
-
-source venv/bin/activate
-# Windows
-# venv\Scripts\activate
-
-pip install -r requirements.txt
-
-python manage.py migrate
-
-python manage.py runserver
-```
-
-### Frontend Setup
-
-```bash
-cd frontend
-
-npm install
-
-npm run dev
-```
-
----
-
-## Project Structure
-
-```
-surge-suite/
+```text
+Organization
 │
-├── backend/
-│   ├── Authentication Services
-│   ├── Face Recognition Pipeline
-│   ├── REST API
-│   ├── RAG Services
-│   └── Database Models
+├── SOA AI Club
+│   ├── Members
+│   ├── Lab Policies
+│   ├── Calendar
+│   ├── Lab Booking
+│   └── Tasks
 │
-├── frontend/
-│   ├── React Application
-│   ├── Components
-│   ├── Pages
-│   └── Assets
+├── SOA Music Club
+│   ├── Members
+│   ├── Club Rules
+│   ├── Calendar
+│   └── Tasks
 │
-├── database/
-│
-├── requirements.txt
-│
-└── README.md
-```
-
----
-
-## Future Enhancements
-
-The long-term vision for Surge Suite is to evolve into a comprehensive productivity platform centered around biometric authentication and intelligent collaboration.
-
-Planned enhancements include:
-
-- Rich text document editor with functionality comparable to modern word processors
-- Spreadsheet application for calculations, data analysis, and tabular information management
-- Peer-to-peer real-time collaboration on documents, notes, and spreadsheets
-- Cross-organization collaboration with secure workspace sharing and access control
-- Organization management with role-based permissions and dedicated team workspaces
-- AI-powered document search, summarization, and contextual assistance
-- Version history and document recovery
-- End-to-end encrypted cloud synchronization
-- Cross-device synchronization
-- Mobile application support
-
----
-
-## License
-
-## License
-
-This project is licensed under the Apache License 2.0. You may use, modify, and distribute this software in accordance with the terms of the license. A copy of the license is available in the `LICENSE` file at the root of this repository.
+└── Computer Science Department
+    ├── Members
+    ├── Department Policies
+    ├── Documents
+    └── Department Tools
