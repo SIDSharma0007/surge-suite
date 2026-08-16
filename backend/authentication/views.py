@@ -33,16 +33,23 @@ def register_face_api(request):
     # Generate unique stable UUID for username
     import uuid
     from django.contrib.auth.models import User
+    from django.db import transaction
+    from workspace.models import Workspace
     user_id = data.get('user_id') or f"user_{uuid.uuid4().hex}"
     
-    # Create Django User first (canonical identity)
+    # Create Django User + Default Workspace atomically (canonical identity and storage)
     try:
-        django_user = User.objects.create(
-            username=user_id,
-            first_name=data['name']
-        )
+        with transaction.atomic():
+            django_user = User.objects.create(
+                username=user_id,
+                first_name=data['name']
+            )
+            Workspace.objects.create(
+                name=f"{django_user.first_name}'s Workspace" if django_user.first_name else "Personal Workspace",
+                owner=django_user
+            )
     except Exception as e:
-        return Response({"error": f"Failed to create canonical user: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": f"Failed to create canonical user and workspace: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
     # Persist in biometric database
     try:
@@ -54,11 +61,11 @@ def register_face_api(request):
             extra_metadata=data.get('extra_metadata')
         )
         if error_msg:
-            # Rollback newly-created Django User
+            # Rollback newly-created Django User (cascades to Workspace)
             django_user.delete()
             return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
-        # Rollback newly-created Django User
+        # Rollback newly-created Django User (cascades to Workspace)
         django_user.delete()
         return Response({"error": f"Biometric registration failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
@@ -89,12 +96,21 @@ def verify_face_api(request):
     if result["authenticated"]:
         from django.contrib.auth.models import User
         from django.contrib.auth import login as django_login
+        from workspace.models import Workspace
         
         user_id = result["user"]["user_id"]
         try:
             # Resolves identity: match biometric user_id to exact Django User.username
             django_user = User.objects.get(username=user_id)
             django_login(request, django_user)
+            
+            # Ensure the user has at least one owned workspace (heal if legacy)
+            if not Workspace.objects.filter(owner=django_user).exists():
+                Workspace.objects.create(
+                    name=f"{django_user.first_name}'s Workspace" if django_user.first_name else "Personal Workspace",
+                    owner=django_user
+                )
+
             # Make sure we use Django User details in returned JSON
             result["user"]["user_id"] = django_user.username
             result["user"]["name"] = django_user.first_name or django_user.username

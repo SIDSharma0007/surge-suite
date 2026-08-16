@@ -1,16 +1,16 @@
 # Database Documentation
 
-This document describes the verified databases and local persistence channels utilized by **Surge Suite** as of Phase 1 database configuration.
+This document describes the verified databases and local persistence channels utilized by **Surge Suite** as of Phase 3 workspace configuration.
 
 ---
 
 ## Persistence Stack Overview
 
-The application utilizes three distinct persistence models:
+The application utilizes the following persistence models:
 
 | Component | Target Data | Persistence Engine | Location |
 | :--- | :--- | :--- | :--- |
-| **Django Framework** | Authentication, relational data | PostgreSQL | Configured via `DATABASE_URL` / `DB_*` variables |
+| **Django Framework** | Users, Workspaces, Memberships, relational data | PostgreSQL | Configured via `DATABASE_URL` / `DB_*` variables |
 | **Face authentication (Primary)** | Face profiles (names, embeddings) | MongoDB | Remote cluster or localhost MongoDB |
 | **Face authentication (Fallback)** | Face profiles (names, embeddings) | Local JSON files | `backend/authentication/services/registered_faces/` |
 | **Productivity Suite (Notes)** | User notes and trash bin notes | Web Storage (localStorage) | Browser-side client |
@@ -19,40 +19,33 @@ The application utilizes three distinct persistence models:
 
 ## 1. PostgreSQL Database Configuration
 
-Django is configured to store relational application data in PostgreSQL. SQLite is no longer used, and no runtime SQLite fallback is supported.
+Django stores relational application data in PostgreSQL. SQLite is no longer used, and no runtime SQLite fallback is supported.
 
-```python
-import urllib.parse
+### Relational Schema (Phase 3 Updates)
+The following tables are implemented in PostgreSQL:
 
-DATABASE_URL = config("DATABASE_URL", default="")
+#### A. `workspace_workspace`
+- Stores workspace metadata and links each workspace to its canonical owner.
+- **Fields**:
+  - `id`: `uuid` (Primary Key).
+  - `name`: `varchar(255)`.
+  - `owner_id`: `integer` (ForeignKey referencing `auth_user.id` on delete CASCADE).
+  - `is_archived`: `boolean` (Default: `false`).
+  - `created_at` / `updated_at`: `timestamp`.
+  - `archived_at` / `scheduled_deletion_at`: `timestamp` (Null unless archived).
 
-if DATABASE_URL:
-    url = urllib.parse.urlparse(DATABASE_URL)
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": urllib.parse.unquote(url.path.lstrip("/")),
-            "USER": urllib.parse.unquote(url.username or ""),
-            "PASSWORD": urllib.parse.unquote(url.password or ""),
-            "HOST": urllib.parse.unquote(url.hostname or ""),
-            "PORT": url.port or 5432,
-        }
-    }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": config("DB_NAME", default="surge_suite"),
-            "USER": config("DB_USER", default=""),
-            "PASSWORD": config("DB_PASSWORD", default=""),
-            "HOST": config("DB_HOST", default="localhost"),
-            "PORT": config("DB_PORT", default="5432", cast=int),
-        }
-    }
-```
+#### B. `workspace_workspacemembership`
+- Stores additional workspace members (excluding the owner).
+- **Fields**:
+  - `id`: `bigint` (Primary Key).
+  - `workspace_id`: `uuid` (ForeignKey referencing `workspace_workspace.id` on delete CASCADE).
+  - `user_id`: `integer` (ForeignKey referencing `auth_user.id` on delete CASCADE).
+  - `role`: `varchar(50)` (Choices: `MEMBER`).
+  - `created_at`: `timestamp`.
+- **Constraints**:
+  - `unique_together = ('workspace', 'user')` to block duplicate memberships.
 
-- **Current State**: PostgreSQL driver dependencies are added (`psycopg[binary]==3.3.4`). SQLite is deprecated and fully removed from settings.
-- **Migration Status**: Default Django migrations (`admin`, `auth`, `contenttypes`, `sessions`) are configured to execute against the active PostgreSQL database.
+- **Migration Status**: All migrations (`admin`, `auth`, `contenttypes`, `sessions`, `workspace`) are fully applied (`Applying workspace.0001_initial... OK`).
 
 ---
 
@@ -71,7 +64,7 @@ MongoDB is the primary database for the face authentication service.
 
 If the MongoDB client fails to connect or force-ping the cluster, the `FaceDatabase` class (`database.py`) automatically shifts database actions to local JSON storage:
 - **Fallback Directory**: `backend/authentication/services/registered_faces/` (subfolder defined dynamically from the collection name).
-- **Format**: Files are named `user_<user_id>.json` containing user details, timestamps, active flags, and the 512-element floating-point `embedding` vector.
+- **Format**: Files are named `user_<user_id>.json` containing user details, embeddings (512-element floating-point vector), and metadata.
 
 ---
 
@@ -92,7 +85,7 @@ This table lists the current verified storage locations of all entities in the c
 | Data | Current Location | Canonical Location | Reason | Phase |
 | :--- | :--- | :--- | :--- | :--- |
 | **users** | Browser `localStorage` (`surge_session`) & memory context | PostgreSQL (`auth_user` tables) | Django authentication framework utilizes standard relational user records. | Phase 1 (Configured), Phase 2 (Implemented) |
-| **workspace data** | Unimplemented (Mock state `[]` in `Dashboard.jsx`) | NOT IMPLEMENTED | Relational container | Phase 3 |
+| **workspace data** | PostgreSQL (`workspace_workspace` / `workspace_workspacemembership` tables) | PostgreSQL | Relational containers for data isolation and member access control. | Phase 3 (Implemented) |
 | **notes** | Browser `localStorage` (`surge_notes`, `surge_notes_bin`) | NOT IMPLEMENTED | Relational text documents | Phase 4 |
 | **tasks/todos** | Unimplemented (Mock interface template) | NOT IMPLEMENTED | Checklist item | Phase 12/Future |
 | **facial embeddings** | MongoDB collection `registered_faces` / Local JSON fallback | MongoDB | Storing mathematical face recognition high-dimensional vectors (ArcFace embeddings). | Phase 1 (Boundary set) |
@@ -103,7 +96,7 @@ This table lists the current verified storage locations of all entities in the c
 
 ---
 
-## 6. Technical Debt and Phase 1 Database Work
+## 6. Technical Debt and Future Relational Targets
 
 - **localStorage Notes & Tasks**: Currently, user notes are stored entirely in client-side browser `localStorage`. This is a significant technical debt because notes are device-bound, unauthenticated, and bypass backend control. This persistence layer will be migrated to Django PostgreSQL REST APIs in Phase 4.
-- **SQLite Deprecation**: Relational schema operations are now fully pointed to PostgreSQL. Relational migrations can only be executed against a valid PostgreSQL instance.
+- **Archived Workspace Retention**: Archived workspaces remain stored in PostgreSQL for a 30-day recovery window. A deletion deadline (`scheduled_deletion_at`) is calculated server-side, after which they are permanently purged from PostgreSQL via the `purge_archived_workspaces` management command.

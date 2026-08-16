@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
 import Notes from './Notes.jsx';
+import { workspaceServices } from '../services/workspaceServices';
 import { 
   LayoutGrid, 
   Table, 
@@ -17,7 +18,9 @@ import {
   Pin,
   Clock,
   Zap,
-  Database
+  Database,
+  AlertCircle,
+  Archive
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -25,8 +28,24 @@ export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('Workspaces');
 
-  // Real-time states representing an empty workspace suite
+  // Real-time states representing workspaces
   const [workspaces, setWorkspaces] = useState([]);
+  const [archivedWorkspaces, setArchivedWorkspaces] = useState([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => {
+    return localStorage.getItem('surge_active_workspace_id') || '';
+  });
+  const [workspaceError, setWorkspaceError] = useState(null);
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [editingWorkspaceId, setEditingWorkspaceId] = useState(null);
+  const [editingWorkspaceName, setEditingWorkspaceName] = useState('');
+
+  // Membership modal states
+  const [membersModalOpen, setMembersModalOpen] = useState(false);
+  const [membersWorkspace, setMembersWorkspace] = useState(null);
+  const [membersList, setMembersList] = useState([]);
+  const [allUsersList, setAllUsersList] = useState([]);
+  const [selectedUserToAdd, setSelectedUserToAdd] = useState('');
+
   const [pinnedFiles, setPinnedFiles] = useState([]);
 
   // Helper to compute remaining days in the Trash Bin (max 30 days)
@@ -87,6 +106,130 @@ export default function Dashboard() {
   const saveBinNotes = (updatedBinNotes) => {
     setDeletedNotes(updatedBinNotes);
     localStorage.setItem('surge_notes_bin', JSON.stringify(updatedBinNotes));
+  };
+
+  const fetchWorkspaces = async () => {
+    try {
+      setWorkspaceError(null);
+      const res = await workspaceServices.list();
+      setWorkspaces(res.data);
+      
+      const archivedRes = await workspaceServices.listArchived();
+      setArchivedWorkspaces(archivedRes.data);
+      
+      // Auto active workspace selection
+      if (res.data.length > 0) {
+        const found = res.data.find(w => w.id === activeWorkspaceId);
+        if (!found) {
+          setActiveWorkspaceId(res.data[0].id);
+          localStorage.setItem('surge_active_workspace_id', res.data[0].id);
+        }
+      } else {
+        setActiveWorkspaceId('');
+        localStorage.removeItem('surge_active_workspace_id');
+      }
+    } catch (err) {
+      console.error("Failed to fetch workspaces:", err);
+      setWorkspaceError("Failed to load workspaces. Please check connection.");
+    }
+  };
+
+  useEffect(() => {
+    fetchWorkspaces();
+  }, []);
+
+  const handleCreateWorkspace = async (e) => {
+    e.preventDefault();
+    if (!newWorkspaceName.trim()) return;
+    try {
+      setWorkspaceError(null);
+      const res = await workspaceServices.create({ name: newWorkspaceName });
+      setNewWorkspaceName('');
+      await fetchWorkspaces();
+      setActiveWorkspaceId(res.data.id);
+      localStorage.setItem('surge_active_workspace_id', res.data.id);
+    } catch (err) {
+      const msg = err.response?.data?.error || "Failed to create workspace.";
+      setWorkspaceError(msg);
+    }
+  };
+
+  const handleStartEdit = (ws) => {
+    setEditingWorkspaceId(ws.id);
+    setEditingWorkspaceName(ws.name);
+  };
+
+  const handleSaveRename = async (id) => {
+    if (!editingWorkspaceName.trim()) return;
+    try {
+      setWorkspaceError(null);
+      await workspaceServices.update(id, { name: editingWorkspaceName });
+      setEditingWorkspaceId(null);
+      await fetchWorkspaces();
+    } catch (err) {
+      setWorkspaceError(err.response?.data?.error || "Failed to rename workspace.");
+    }
+  };
+
+  const handleArchiveWorkspace = async (id) => {
+    try {
+      setWorkspaceError(null);
+      await workspaceServices.archive(id);
+      await fetchWorkspaces();
+    } catch (err) {
+      setWorkspaceError(err.response?.data?.error || "Failed to archive workspace.");
+    }
+  };
+
+  const handleRestoreWorkspace = async (id) => {
+    try {
+      setWorkspaceError(null);
+      await workspaceServices.restore(id);
+      await fetchWorkspaces();
+    } catch (err) {
+      setWorkspaceError(err.response?.data?.error || "Failed to restore workspace.");
+    }
+  };
+
+  const handleOpenMembers = async (ws) => {
+    try {
+      setWorkspaceError(null);
+      setMembersWorkspace(ws);
+      const membersRes = await workspaceServices.listMembers(ws.id);
+      setMembersList(membersRes.data);
+      const usersRes = await workspaceServices.listAllUsers();
+      setAllUsersList(usersRes.data);
+      setMembersModalOpen(true);
+    } catch (err) {
+      setWorkspaceError("Failed to open membership dashboard.");
+    }
+  };
+
+  const handleAddMember = async () => {
+    if (!selectedUserToAdd) return;
+    try {
+      setWorkspaceError(null);
+      await workspaceServices.addMember(membersWorkspace.id, { user_id: selectedUserToAdd });
+      setSelectedUserToAdd('');
+      // Reload members
+      const membersRes = await workspaceServices.listMembers(membersWorkspace.id);
+      setMembersList(membersRes.data);
+    } catch (err) {
+      const msg = err.response?.data?.error || "Failed to add member.";
+      setWorkspaceError(msg);
+    }
+  };
+
+  const handleRemoveMember = async (userId) => {
+    try {
+      setWorkspaceError(null);
+      await workspaceServices.removeMember(membersWorkspace.id, userId);
+      // Reload members
+      const membersRes = await workspaceServices.listMembers(membersWorkspace.id);
+      setMembersList(membersRes.data);
+    } catch (err) {
+      setWorkspaceError("Failed to remove member.");
+    }
   };
 
   // Boot-time auto-purge for items older than 30 days
@@ -296,135 +439,205 @@ export default function Dashboard() {
               
               {/* Header block */}
               <header style={styles.greetingHeader}>
-                <h1 style={styles.greetingTitle}>{getGreeting()}, {firstName}</h1>
-                <p style={styles.greetingSubtitle}>Welcome back to your workspace. Here is a summary of your active tasks.</p>
+                <h1 style={styles.greetingTitle}>Workspaces</h1>
+                <p style={styles.greetingSubtitle}>Manage and organize your team workspaces and access limits.</p>
               </header>
 
-              {/* Workspace Sections Grid */}
-              <div style={styles.workspaceGrid}>
-                
-                {/* Main section: Workspaces and Files */}
-                <div style={styles.mainSection}>
-                  
-                  {/* Pinned Notes Section */}
-                  <section style={styles.section}>
-                    <div style={styles.sectionHeader}>
-                      <Pin size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
-                      <h3 style={styles.sectionTitle}>Pinned Notes</h3>
-                    </div>
+              {workspaceError && (
+                <div style={styles.errorAlert}>
+                  <AlertCircle size={15} style={{ marginRight: '8px', flexShrink: 0 }} />
+                  {workspaceError}
+                </div>
+              )}
 
-                    {notes.filter(n => n.isPinned).length > 0 ? (
-                      <div style={styles.notesGrid}>
-                        {notes.filter(n => n.isPinned).map(note => (
-                          <div 
-                            key={note.id} 
-                            onClick={() => handleOpenNote(note.id)} 
-                            style={styles.noteCard}
-                            className="note-card-hover"
-                          >
-                            <div style={styles.noteCardHeader}>
-                              <h4 style={styles.noteCardTitle}>{note.title || 'Untitled Note'}</h4>
-                              <Pin size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-                            </div>
-                            <p style={styles.noteCardExcerpt}>{getExcerpt(note.body) || 'No content'}</p>
-                            <span style={styles.noteCardDate}>{new Date(note.updatedAt).toLocaleDateString()}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={styles.emptyCard}>
-                        <Pin size={24} strokeWidth={1.5} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
-                        <h4 style={styles.emptyTitle}>No pinned notes</h4>
-                        <p style={styles.emptyText}>Pin important notes to have them pinned here for quick access.</p>
-                      </div>
-                    )}
-                  </section>
+              {/* Create Workspace Panel */}
+              <section style={styles.section}>
+                <div style={styles.sectionHeader}>
+                  <FolderPlus size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
+                  <h3 style={styles.sectionTitle}>Create New Workspace</h3>
+                </div>
+                <form onSubmit={handleCreateWorkspace} style={styles.createForm}>
+                  <input
+                    type="text"
+                    value={newWorkspaceName}
+                    onChange={(e) => setNewWorkspaceName(e.target.value)}
+                    placeholder="Enter workspace name"
+                    style={styles.textInput}
+                    disabled={workspaces.filter(w => w.owner.username === username).length >= 5}
+                  />
+                  <button 
+                    type="submit" 
+                    style={styles.actionBtn}
+                    disabled={workspaces.filter(w => w.owner.username === username).length >= 5}
+                  >
+                    <Plus size={14} style={{ marginRight: '6px' }} />
+                    Create
+                  </button>
+                </form>
+                {workspaces.filter(w => w.owner.username === username).length >= 5 && (
+                  <p style={{ color: 'var(--status-error)', fontSize: '12px', marginTop: '8px' }}>
+                    * You have reached the maximum limit of 5 owned workspaces (including archived ones).
+                  </p>
+                )}
+              </section>
 
-                  {/* Recent Notes Section */}
-                  <section style={{ ...styles.section, marginTop: '32px' }}>
-                    <div style={styles.sectionHeader}>
-                      <Clock size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
-                      <h3 style={styles.sectionTitle}>Recent Notes</h3>
-                    </div>
-
-                    {notes.length > 0 ? (
-                      <div style={styles.recentNotesList}>
-                        {[...notes].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).map((note, index, array) => (
-                          <div 
-                            key={note.id} 
-                            onClick={() => handleOpenNote(note.id)} 
-                            style={{
-                              ...styles.recentNoteRow,
-                              borderBottom: index === array.length - 1 ? 'none' : '1px solid var(--border-light)'
-                            }}
-                            className="note-row-hover"
-                          >
-                            <div style={styles.recentNoteLeft}>
-                              <FileText size={14} style={{ color: 'var(--text-muted)', marginRight: '12px' }} />
-                              <span style={styles.recentNoteTitle}>{note.title || 'Untitled Note'}</span>
-                            </div>
-                            <span style={styles.recentNoteExcerpt}>{getExcerpt(note.body) || 'No content'}</span>
-                            <span style={styles.recentNoteDate}>{new Date(note.updatedAt).toLocaleDateString()}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={styles.emptyCard}>
-                        <FolderPlus size={24} strokeWidth={1.5} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
-                        <h4 style={styles.emptyTitle}>No recent notes found</h4>
-                        <p style={styles.emptyText}>Create a new note to begin writing.</p>
-                      </div>
-                    )}
-                  </section>
-
+              {/* Active/Accessible Workspaces Section */}
+              <section style={{ ...styles.section, marginTop: '32px' }}>
+                <div style={styles.sectionHeader}>
+                  <LayoutGrid size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
+                  <h3 style={styles.sectionTitle}>Active Workspaces</h3>
                 </div>
 
-                {/* Sidebar section: Quick Actions & Recent Activity */}
-                <div style={styles.dashboardRightSidebar}>
-                  
-                  {/* Quick Actions */}
-                  <div style={styles.sidebarWidget}>
-                    <div style={styles.widgetHeader}>
-                      <Zap size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
-                      <h4 style={styles.widgetTitle}>Quick Actions</h4>
-                    </div>
-                    <div style={styles.widgetBody}>
-                      <button onClick={handleCreateNote} style={styles.actionBtn} className="action-btn-hover">
-                        <Plus size={14} style={{ marginRight: '8px' }} />
-                        Create New Note
-                      </button>
-                      <button 
-                        style={{ ...styles.actionBtn, marginTop: '8px', cursor: 'not-allowed', opacity: 0.5 }} 
-                        disabled
-                        title="Spreadsheets are coming soon"
-                      >
-                        <Table size={14} style={{ marginRight: '8px' }} />
-                        Create New Spreadsheet
-                        <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: 'auto', fontWeight: '500', border: '1px solid var(--border-medium)', padding: '2px 4px', borderRadius: '4px' }}>Coming Soon</span>
-                      </button>
-                    </div>
-                  </div>
+                {workspaces.length > 0 ? (
+                  <div style={styles.workspaceGrid}>
+                    {workspaces.map(ws => {
+                      const isEditing = editingWorkspaceId === ws.id;
+                      const isOwner = ws.owner.username === username;
+                      const isActive = activeWorkspaceId === ws.id;
+                      
+                      return (
+                        <div 
+                          key={ws.id} 
+                          style={{
+                            ...styles.workspaceCard,
+                            border: isActive ? '1px solid var(--text-primary)' : '1px solid var(--border-medium)'
+                          }}
+                        >
+                          <div style={styles.workspaceCardHeader}>
+                            {isEditing ? (
+                              <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                                <input
+                                  type="text"
+                                  value={editingWorkspaceName}
+                                  onChange={(e) => setEditingWorkspaceName(e.target.value)}
+                                  style={{ ...styles.textInput, padding: '4px 8px' }}
+                                />
+                                <button onClick={() => handleSaveRename(ws.id)} style={{ ...styles.actionBtn, padding: '4px 10px' }}>Save</button>
+                                <button onClick={() => setEditingWorkspaceId(null)} style={{ ...styles.actionBtn, background: 'var(--bg-card)', border: '1px solid var(--border-medium)', color: 'var(--text-primary)', padding: '4px 10px' }}>Cancel</button>
+                              </div>
+                            ) : (
+                              <>
+                                <h4 style={styles.workspaceCardTitle}>{ws.name}</h4>
+                                {isActive && <span style={styles.activeLabel}>Active</span>}
+                              </>
+                            )}
+                          </div>
+                          
+                          <div style={styles.workspaceMeta}>
+                            <p style={styles.metaText}><strong>Owner:</strong> {ws.owner.first_name || ws.owner.username}</p>
+                            <p style={styles.metaText}><strong>Your Role:</strong> {ws.role}</p>
+                          </div>
 
-                  {/* Storage Details */}
-                  <div style={{ ...styles.sidebarWidget, marginTop: '24px' }}>
-                    <div style={styles.widgetHeader}>
-                      <Database size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
-                      <h4 style={styles.widgetTitle}>Storage Quota</h4>
-                    </div>
-                    <div style={styles.widgetBody}>
-                      <div style={styles.quotaInfo}>
-                        <span style={styles.quotaText}>0 KB of 1 GB used</span>
-                        <span style={styles.quotaPercentage}>0%</span>
-                      </div>
-                      <div style={styles.progressBarBg}>
-                        <div style={styles.progressBarActive} />
-                      </div>
-                    </div>
+                          <div style={styles.workspaceActions}>
+                            {!isActive && (
+                              <button 
+                                onClick={() => {
+                                  setActiveWorkspaceId(ws.id);
+                                  localStorage.setItem('surge_active_workspace_id', ws.id);
+                                }} 
+                                style={styles.selectBtn}
+                              >
+                                Select Workspace
+                              </button>
+                            )}
+                            {isOwner && !isEditing && (
+                              <>
+                                <button onClick={() => handleStartEdit(ws)} style={styles.iconBtn} title="Rename Workspace">
+                                  Rename
+                                </button>
+                                <button onClick={() => handleOpenMembers(ws)} style={styles.iconBtn} title="Manage Members">
+                                  Members
+                                </button>
+                                <button onClick={() => handleArchiveWorkspace(ws.id)} style={{ ...styles.iconBtn, color: 'var(--status-error)' }} title="Archive Workspace">
+                                  Archive
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
+                ) : (
+                  <p style={styles.emptyText}>No active workspaces found. Create one above to get started.</p>
+                )}
+              </section>
 
+              {/* Archived Workspaces Section */}
+              {archivedWorkspaces.length > 0 && (
+                <section style={{ ...styles.section, marginTop: '32px' }}>
+                  <div style={styles.sectionHeader}>
+                    <Archive size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
+                    <h3 style={styles.sectionTitle}>Archived Workspaces</h3>
+                  </div>
+                  <div style={styles.workspaceGrid}>
+                    {archivedWorkspaces.map(ws => (
+                      <div key={ws.id} style={{ ...styles.workspaceCard, opacity: 0.7, background: 'rgba(0,0,0,0.02)' }}>
+                        <div style={styles.workspaceCardHeader}>
+                          <h4 style={styles.workspaceCardTitle}>{ws.name}</h4>
+                          <span style={{ ...styles.activeLabel, background: 'var(--border-medium)', color: 'var(--text-secondary)' }}>Archived</span>
+                        </div>
+                        <div style={styles.workspaceMeta}>
+                          <p style={styles.metaText}>Archived on: {new Date(ws.archived_at).toLocaleDateString()}</p>
+                          <p style={styles.metaText}>Permanent deletion: {new Date(ws.scheduled_deletion_at).toLocaleDateString()}</p>
+                        </div>
+                        <div style={styles.workspaceActions}>
+                          <button onClick={() => handleRestoreWorkspace(ws.id)} style={styles.selectBtn}>
+                            Restore Workspace
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* Members Management Modal */}
+              {membersModalOpen && membersWorkspace && (
+                <div style={styles.modalOverlay}>
+                  <div style={styles.modalContent}>
+                    <h3 style={styles.modalTitle}>Manage Members for "{membersWorkspace.name}"</h3>
+                    
+                    <div style={{ marginBottom: '16px' }}>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>Add New Member</label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <select
+                          value={selectedUserToAdd}
+                          onChange={(e) => setSelectedUserToAdd(e.target.value)}
+                          style={styles.selectInput}
+                        >
+                          <option value="">Select a user...</option>
+                          {allUsersList.map(u => (
+                            <option key={u.id} value={u.id}>{u.first_name || u.username}</option>
+                          ))}
+                        </select>
+                        <button onClick={handleAddMember} style={styles.actionBtn}>Add</button>
+                      </div>
+                    </div>
+
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>Current Members</label>
+                    <div style={styles.membersList}>
+                      {membersList.length > 0 ? (
+                        membersList.map(mem => (
+                          <div key={mem.id} style={styles.memberRow}>
+                            <span>{mem.user.first_name || mem.user.username} ({mem.role})</span>
+                            <button onClick={() => handleRemoveMember(mem.user.id)} style={styles.removeBtn}>Remove</button>
+                          </div>
+                        ))
+                      ) : (
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No members added yet.</p>
+                      )}
+                    </div>
+
+                    <button 
+                      onClick={() => setMembersModalOpen(false)} 
+                      style={{ ...styles.actionBtn, width: '100%', marginTop: '20px', background: 'var(--bg-hover)', color: 'var(--text-primary)' }}
+                    >
+                      Close Dashboard
+                    </button>
+                  </div>
                 </div>
-
-              </div>
+              )}
 
             </div>
           ) : activeTab === 'Notes' ? (
@@ -844,5 +1057,157 @@ const styles = {
     width: '80px',
     textAlign: 'right',
     flexShrink: 0,
+  },
+  createForm: {
+    display: 'flex',
+    gap: '12px',
+    width: '100%',
+    maxWidth: '500px',
+    marginBottom: '8px',
+  },
+  textInput: {
+    flex: 1,
+    padding: '8px 12px',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-medium)',
+    background: 'var(--bg-card)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--text-sm)',
+    outline: 'none',
+  },
+  workspaceCard: {
+    background: 'var(--bg-card)',
+    borderRadius: 'var(--radius-lg)',
+    padding: '20px',
+    boxShadow: 'var(--shadow-sm)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    position: 'relative',
+    transition: 'var(--transition-all)',
+  },
+  workspaceCardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+  },
+  workspaceCardTitle: {
+    fontSize: 'var(--text-md)',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
+    margin: 0,
+  },
+  activeLabel: {
+    fontSize: '10px',
+    fontWeight: '700',
+    background: 'var(--text-primary)',
+    color: 'var(--bg-card)',
+    padding: '2px 8px',
+    borderRadius: 'var(--radius-sm)',
+    textTransform: 'uppercase',
+  },
+  workspaceMeta: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  metaText: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-secondary)',
+    margin: 0,
+  },
+  workspaceActions: {
+    display: 'flex',
+    gap: '8px',
+    marginTop: 'auto',
+    flexWrap: 'wrap',
+  },
+  selectBtn: {
+    padding: '6px 12px',
+    borderRadius: 'var(--radius-sm)',
+    background: 'var(--text-primary)',
+    color: 'var(--bg-card)',
+    border: 'none',
+    fontSize: 'var(--text-xs)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'var(--transition-all)',
+  },
+  iconBtn: {
+    padding: '5px 10px',
+    borderRadius: 'var(--radius-sm)',
+    background: 'transparent',
+    border: '1px solid var(--border-medium)',
+    color: 'var(--text-secondary)',
+    fontSize: 'var(--text-xs)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'var(--transition-all)',
+  },
+  modalOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: 'rgba(0,0,0,0.4)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+    backdropFilter: 'blur(4px)',
+  },
+  modalContent: {
+    background: 'var(--bg-card)',
+    borderRadius: 'var(--radius-lg)',
+    padding: '24px',
+    width: '100%',
+    maxWidth: '400px',
+    boxShadow: 'var(--shadow-lg)',
+    border: '1px solid var(--border-medium)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
+  modalTitle: {
+    fontSize: 'var(--text-md)',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
+    margin: 0,
+  },
+  selectInput: {
+    flex: 1,
+    padding: '8px',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-medium)',
+    background: 'var(--bg-card)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--text-sm)',
+    outline: 'none',
+  },
+  membersList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    maxHeight: '200px',
+    overflowY: 'auto',
+  },
+  memberRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '8px 12px',
+    background: 'var(--bg-hover)',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: 'var(--text-xs)',
+  },
+  removeBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--status-error)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    fontSize: '11px',
   }
 };
