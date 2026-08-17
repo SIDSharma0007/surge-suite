@@ -426,6 +426,7 @@ export default function Dashboard() {
   };
 
   const { currentUser, logout } = useAuth();
+  const username = currentUser?.user_id;
 
   const firstName = currentUser?.name 
     ? currentUser.name.split(' ')[0] 
