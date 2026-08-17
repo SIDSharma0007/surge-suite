@@ -6,6 +6,22 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/
 // Helper to retrieve the auth token (returns null for now, change this line to add auth token later)
 const getAuthToken = () => null; // e.g., () => localStorage.getItem('token');
 
+// Helper to retrieve cookie values by name (e.g. csrftoken)
+const getCookie = (name) => {
+  let cookieValue = null;
+  if (document.cookie && document.cookie !== '') {
+    const cookies = document.cookie.split(';');
+    for (let i = 0; i < cookies.length; i++) {
+      const cookie = cookies[i].trim();
+      if (cookie.substring(0, name.length + 1) === (name + '=')) {
+        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+        break;
+      }
+    }
+  }
+  return cookieValue;
+};
+
 // Create a configured axios instance
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -32,6 +48,13 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+
+    // Attach CSRF token manually because Axios disables auto-xsrf for cross-origin requests
+    const csrfToken = getCookie('csrftoken');
+    if (csrfToken) {
+      config.headers['X-CSRFToken'] = csrfToken;
+    }
+
     return config;
   },
   (error) => {
