@@ -1,148 +1,182 @@
 # Surge Suite
 
-Surge Suite is a face recognition-powered productivity platform that enables secure, passwordless authentication through facial biometrics. The application identifies registered users in real time and grants access to their personalized workspace without relying on conventional credentials.
+Surge Suite is a biometric face-recognition-powered productivity platform that enables secure, passwordless authentication through facial biometrics. The application identifies registered users in real time and grants access to their personalized workspace without relying on conventional password credentials.
 
 Built for both personal and shared environments, Surge Suite supports multiple registered users on a single device while ensuring complete separation of user data. When an unrecognized face is detected, the application initiates a registration process to create a new user profile and securely associate facial embeddings with that account.
-
-The current release provides every authenticated user with a private workspace consisting of a notes application and a task management system. An integrated Retrieval-Augmented Generation (RAG) pipeline enables intelligent retrieval of notes and contextual assistance, making information easier to locate and utilize.
 
 ---
 
 ## Features
 
-- Face-based user registration and authentication
-- Passwordless login through real-time facial recognition
-- Personalized workspaces for individual users
-- Secure multi-user support on a single device
-- Private notes management
-- To-do list and task management
-- AI-assisted note retrieval using a Retrieval-Augmented Generation (RAG) pipeline
-- Automatic recognition of returning users
-- JSON-based storage fallback for improved resilience
+- **Biometric Registration & Authentication**: Face-based user registration and real-time passwordless login.
+- **Relational Workspace Management**: Auto-provisioned isolated personal workspace on registration, with support for creating up to 5 owned workspaces (including archived ones) and joining unlimited team workspaces.
+- **Collaborative Memberships**: Add and manage members within owned workspaces.
+- **Archive & Recovery Lifecycles**: Move workspaces to an archived state with a 30-day recovery window before permanent deletion.
+- **Polished Notes Library**: Features a premium monochromatic notes workspace with tags, VIBGYOR coloring, trash bin, shortcuts, and custom text formatting.
+- **JSON Persistence Fallback**: Development-only fallback if MongoDB connectivity is lost.
 
 ---
 
 ## Technology Stack
 
 ### Frontend
-- React
+- **Framework**: React 18.3.1 (Vite-powered SPA)
+- **Styling**: Vanilla CSS with modern dark/light mode configurations.
+- **Icons**: Lucide React
 
 ### Backend
-- Django
-- Django REST Framework
-
-### Database
-- MongoDB
-- JSON storage fallback
-
-### Computer Vision
-- OpenCV
-- MTCNN
-- RetinaFace
-- SSD
-
-### Artificial Intelligence
-- Retrieval-Augmented Generation (RAG)
+- **Framework**: Django 6.0.7 & Django REST Framework (DRF)
+- **Biometrics Stack**: ArcFace model, OpenCV, MTCNN, SSD-based detectors
+- **Relational DB**: PostgreSQL
+- **Biometric DB**: MongoDB (with local JSON filesystem fallback)
 
 ---
 
-## System Architecture
+## System Architecture & Database Topology
 
-Surge Suite follows a client-server architecture consisting of a React frontend, a Django REST backend, MongoDB for persistent storage, and a computer vision pipeline responsible for authentication.
+Surge Suite maintains a clear separation between its persistence boundaries:
 
-Upon launching the application, the webcam initializes and begins processing video frames. Facial detection is performed using OpenCV alongside MTCNN, RetinaFace, and SSD-based detection models. If a registered user is recognized, authentication is completed automatically and the corresponding workspace is loaded. If no matching profile is found, the user is prompted to register by providing a name and facial data.
+```mermaid
+graph TD
+    A[React Frontend SPA] -->|HTTP Requests / JSON / Base64 Images| B[Django REST API]
+    B -->|Workspace & Memberships| C[(PostgreSQL Database)]
+    B -->|Biometric Math Vector| D[Face Recognition Services]
+    D -->|MongoDB Query| E[(MongoDB Cluster)]
+    D -->|File System Fallback| F[(Local JSON folder)]
+    A -->|State Sync| G[(Browser localStorage)]
+```
 
-The backend exposes RESTful APIs responsible for authentication, workspace management, notes, tasks, and AI-powered retrieval. MongoDB stores user information and workspace data, while a JSON-based storage mechanism serves as a fallback when database connectivity is unavailable. The integrated RAG pipeline enables semantic retrieval of stored notes and contextual information.
+### 1. PostgreSQL (Relational Database)
+PostgreSQL is the authoritative store for all core relational application data.
+- **User Models**: Stores standard Django User records (`username` is set to the biometric `user_id` UUID string, and display names are saved in `first_name`).
+- **Workspaces & Memberships**: Stores workspaces, owners, and membership tables (`Workspace` and `WorkspaceMembership` models).
+- **Session State**: Session cookies and CSRF tokens are verified on the server side against this relational boundary.
+
+### 2. MongoDB / Biometric Storage
+MongoDB is the primary database for storing facial biometric data.
+- **Collections**: Stores ArcFace 512-dimension floating-point face embeddings, names, timestamps, and registration device metadata in the `registered_faces` collection.
+- **JSON Fallback**: If the MongoDB server is unreachable (e.g., due to local network or TLS handshake issues), database operations automatically fall back to writing/reading local JSON files under the `backend/authentication/services/registered_faces/` directory.
 
 ---
 
-## Installation
+## Installation & Setup
 
-### Clone the Repository
+Follow these steps to set up a local development environment.
 
+### 1. Clone the Repository
 ```bash
 git clone https://github.com/abhinavAryan47/surge-suite.git
 cd surge-suite
 ```
 
-### Backend Setup
+### 2. Database Prerequisites
+Ensure you have the following database engines running locally:
+- **PostgreSQL**: Running on port `5432` with a database named `surge_suite` created.
+- **MongoDB**: Running on port `27017` (or configured via connection string).
 
+---
+
+### 3. Backend Setup
+
+1. **Navigate and create virtual environment**:
+   ```bash
+   cd backend
+   python -m venv .venv
+   source .venv/bin/activate
+   # Windows: .venv\Scripts\activate
+   ```
+
+2. **Install requirements**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Configure Environment Variables**:
+   Copy `.env.example` to `.env` and configure your local settings:
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` to supply a secure `SECRET_KEY`, set `DEBUG=True`, and provide the correct credentials for `DATABASE_URL` (PostgreSQL) and `MONGO_URI` (MongoDB).
+
+4. **Run Database Migrations**:
+   ```bash
+   python manage.py migrate
+   ```
+
+5. **Start the Django Development Server**:
+   ```bash
+   python manage.py runserver
+   ```
+   The backend will start running at `http://127.0.0.1:8000/`.
+
+---
+
+### 4. Frontend Setup
+
+1. **Navigate to the frontend folder**:
+   ```bash
+   cd ../frontend
+   ```
+
+2. **Configure Environment Variables**:
+   Copy `.env.example` to `.env` (it defines `VITE_API_URL` pointing to the backend API):
+   ```bash
+   cp .env.example .env
+   ```
+
+3. **Install npm dependencies**:
+   ```bash
+   npm install
+   ```
+
+4. **Start the Frontend Development Server**:
+   ```bash
+   npm run dev
+   ```
+   The frontend will start running at `http://localhost:5173/`. Open this URL in a modern web browser.
+
+---
+
+## Workspace Features & Lifecycles
+
+Surge Suite workspace routing enforces strong ownership and scoping guidelines:
+- **Default Scopes**: Every newly registered user gets a default `"Personal Workspace"` automatically created in the database.
+- **Ownership Caps**: Each user is capped at owning a maximum of **5 workspaces** (including archived workspaces). This limit is enforced transactionally using PostgreSQL row-level locks on the user record during workspace creation.
+- **Memberships**: Users can join an unlimited number of workspaces as a `MEMBER`.
+- **Archival & Recovery**: Users can archive an owned workspace. Archived workspaces:
+  - Are immediately hidden from normal access.
+  - Remain stored in the database for a **30-day recovery window** (during which they can be restored by the owner).
+  - Continue to count toward the owner's 5-workspace cap until purged.
+- **Permanent Purges**: After the 30-day recovery window expires, workspaces and their memberships are permanently deleted. This is done by executing the backend purge task.
+
+---
+
+## Development & Testing Commands
+
+### Backend Tests
+Ensure the virtual environment is active in the `backend/` directory, then run:
 ```bash
-cd backend
-
-python -m venv venv
-
-source venv/bin/activate
-# Windows
-# venv\Scripts\activate
-
-pip install -r requirements.txt
-
-python manage.py migrate
-
-python manage.py runserver
+python manage.py test authentication workspace
 ```
 
-### Frontend Setup
-
+### Validate System Health
 ```bash
-cd frontend
+python manage.py check
+```
 
-npm install
+### Run Workspace Purging Task
+To permanently delete archived workspaces whose 30-day recovery window has passed:
+```bash
+python manage.py purge_archived_workspaces
+```
 
-npm run dev
+### Frontend Build Compilation
+```bash
+npm run build
 ```
 
 ---
 
-## Project Structure
-
-```
-surge-suite/
-│
-├── backend/
-│   ├── Authentication Services
-│   ├── Face Recognition Pipeline
-│   ├── REST API
-│   ├── RAG Services
-│   └── Database Models
-│
-├── frontend/
-│   ├── React Application
-│   ├── Components
-│   ├── Pages
-│   └── Assets
-│
-├── database/
-│
-├── requirements.txt
-│
-└── README.md
-```
-
----
-
-## Future Enhancements
-
-The long-term vision for Surge Suite is to evolve into a comprehensive productivity platform centered around biometric authentication and intelligent collaboration.
-
-Planned enhancements include:
-
-- Rich text document editor with functionality comparable to modern word processors
-- Spreadsheet application for calculations, data analysis, and tabular information management
-- Peer-to-peer real-time collaboration on documents, notes, and spreadsheets
-- Cross-organization collaboration with secure workspace sharing and access control
-- Organization management with role-based permissions and dedicated team workspaces
-- AI-powered document search, summarization, and contextual assistance
-- Version history and document recovery
-- End-to-end encrypted cloud synchronization
-- Cross-device synchronization
-- Mobile application support
-
----
-
-## License
-
-## License
-
-This project is licensed under the Apache License 2.0. You may use, modify, and distribute this software in accordance with the terms of the license. A copy of the license is available in the `LICENSE` file at the root of this repository.
+## Security & Privacy Notice
+- **Facial Embeddings**: 512-dimension face vectors are currently stored in plaintext. Hardening vector encryption at rest represents documented security debt to be resolved in a later phase.
+- **Session Authentication**: Authentic session credentials are derived exclusively on the backend from cookies. Browser `localStorage` is used solely to store non-sensitive display cues.
