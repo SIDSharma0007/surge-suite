@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "users",
     "authentication",
     "workspace",
+    "task",
     "notes",
     "todo",
     "rag",

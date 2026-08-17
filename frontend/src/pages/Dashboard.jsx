@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
 import Notes from './Notes.jsx';
 import { workspaceServices } from '../services/workspaceServices';
+import { taskServices } from '../services/taskServices';
 import { 
   LayoutGrid, 
   Table, 
@@ -20,7 +21,8 @@ import {
   Zap,
   Database,
   AlertCircle,
-  Archive
+  Archive,
+  ClipboardList
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -47,6 +49,91 @@ export default function Dashboard() {
   const [selectedUserToAdd, setSelectedUserToAdd] = useState('');
 
   const [pinnedFiles, setPinnedFiles] = useState([]);
+
+  // Task & Agent execution state variables
+  const [tasks, setTasks] = useState([]);
+  const [selectedTaskId, setSelectedTaskId] = useState(null);
+  const [taskProblemStatement, setTaskProblemStatement] = useState('');
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [executingTaskId, setExecutingTaskId] = useState(null);
+  const [taskError, setTaskError] = useState('');
+
+  const loadTasks = async (wsId) => {
+    if (!wsId) return;
+    setTasksLoading(true);
+    try {
+      const res = await taskServices.list(wsId);
+      setTasks(res.data);
+    } catch (err) {
+      console.error(err);
+      setTaskError("Failed to load tasks.");
+    } finally {
+      setTasksLoading(false);
+    }
+  };
+
+  const refreshTaskDetails = async (taskId) => {
+    try {
+      const res = await taskServices.retrieve(taskId);
+      setTasks(prev => prev.map(t => t.id === taskId ? res.data : t));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleExecuteTask = async (taskId) => {
+    setExecutingTaskId(taskId);
+    setTaskError('');
+    try {
+      await taskServices.execute(taskId);
+      await refreshTaskDetails(taskId);
+    } catch (err) {
+      console.error(err);
+      setTaskError("Execution failed: " + (err.response?.data?.error || err.message));
+      await refreshTaskDetails(taskId);
+    } finally {
+      setExecutingTaskId(null);
+    }
+  };
+
+  const handleCreateTask = async (e) => {
+    e.preventDefault();
+    if (!taskProblemStatement.trim()) return;
+    setTaskError('');
+    try {
+      const res = await taskServices.create(activeWorkspaceId, taskProblemStatement);
+      setTasks(prev => [res.data, ...prev]);
+      setTaskProblemStatement('');
+      setSelectedTaskId(res.data.id);
+      
+      // Automatically trigger execution synchronously
+      handleExecuteTask(res.data.id);
+    } catch (err) {
+      console.error(err);
+      setTaskError("Failed to create task: " + (err.response?.data?.error || err.message));
+    }
+  };
+
+  useEffect(() => {
+    if (activeWorkspaceId && activeTab === 'Tasks') {
+      loadTasks(activeWorkspaceId);
+      setSelectedTaskId(null);
+      setTaskError('');
+    }
+  }, [activeWorkspaceId, activeTab]);
+
+  // Periodic polling for task status if currently selected task is RUNNING or PENDING
+  useEffect(() => {
+    if (!selectedTaskId || activeTab !== 'Tasks') return;
+    const selectedTask = tasks.find(t => t.id === selectedTaskId);
+    if (!selectedTask || (selectedTask.status !== 'RUNNING' && selectedTask.status !== 'PENDING')) return;
+
+    const interval = setInterval(() => {
+      refreshTaskDetails(selectedTaskId);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [selectedTaskId, tasks, activeTab]);
 
   // Helper to compute remaining days in the Trash Bin (max 30 days)
   const getRemainingDays = (deletedAt) => {
@@ -377,6 +464,7 @@ export default function Dashboard() {
             { name: 'Workspaces', icon: LayoutGrid },
             { name: 'Spreadsheets', icon: Table },
             { name: 'Notes', icon: FileText },
+            { name: 'Tasks', icon: ClipboardList },
             { name: 'Shared Files', icon: FolderOpen },
             { name: 'Settings', icon: Settings }
           ].map((item) => {
@@ -654,6 +742,226 @@ export default function Dashboard() {
               onPermanentlyDeleteNote={handlePermanentlyDeleteNote}
               onEmptyBin={handleEmptyBin}
             />
+          ) : activeTab === 'Tasks' ? (
+            <div style={styles.tasksWrapper}>
+              <header style={styles.greetingHeader}>
+                <h1 style={styles.greetingTitle}>Agentic Tasks</h1>
+                <p style={styles.greetingSubtitle}>
+                  Submit problem statements to active AI agents and monitor execution logs.
+                </p>
+              </header>
+
+              {taskError && (
+                <div style={styles.errorAlert}>
+                  <AlertCircle size={15} style={{ marginRight: '8px', flexShrink: 0 }} />
+                  {taskError}
+                </div>
+              )}
+
+              {!activeWorkspaceId ? (
+                <div style={styles.emptyTabPanel}>
+                  <ClipboardList size={36} strokeWidth={1.25} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
+                  <h3 style={styles.emptyPanelTitle}>No Workspace Selected</h3>
+                  <p style={styles.emptyPanelText}>Please select or create an active workspace first to manage tasks.</p>
+                </div>
+              ) : (
+                <div style={styles.tasksContainer}>
+                  {/* Left Column: Create Task & Task List */}
+                  <div style={styles.tasksLeftCol}>
+                    <section style={styles.section}>
+                      <div style={styles.sectionHeader}>
+                        <Plus size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
+                        <h3 style={styles.sectionTitle}>New Agent Task</h3>
+                      </div>
+                      <form onSubmit={handleCreateTask} style={styles.taskForm}>
+                        <textarea
+                          value={taskProblemStatement}
+                          onChange={(e) => setTaskProblemStatement(e.target.value)}
+                          placeholder="e.g., Research Python OCR libraries, or calculate 234 * 567..."
+                          style={styles.taskTextarea}
+                          rows={3}
+                          disabled={executingTaskId !== null}
+                        />
+                        <button
+                          type="submit"
+                          className="action-btn"
+                          style={{ ...styles.actionBtn, marginTop: '12px' }}
+                          disabled={executingTaskId !== null || !taskProblemStatement.trim()}
+                        >
+                          {executingTaskId ? 'Executing...' : 'Run Task'}
+                        </button>
+                      </form>
+                    </section>
+
+                    <section style={{ ...styles.section, marginTop: '24px' }}>
+                      <div style={styles.sectionHeader}>
+                        <ClipboardList size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
+                        <h3 style={styles.sectionTitle}>Workspace Tasks</h3>
+                      </div>
+
+                      {tasksLoading && tasks.length === 0 ? (
+                        <p style={styles.loadingText}>Loading tasks...</p>
+                      ) : tasks.length === 0 ? (
+                        <p style={styles.taskEmptyText}>No tasks created yet.</p>
+                      ) : (
+                        <div style={styles.taskList}>
+                          {tasks.map(t => {
+                            const isSelected = selectedTaskId === t.id;
+                            return (
+                              <div
+                                key={t.id}
+                                onClick={() => setSelectedTaskId(t.id)}
+                                style={{
+                                  ...styles.taskItem,
+                                  border: isSelected ? '1px solid var(--text-primary)' : '1px solid var(--border-medium)',
+                                  background: isSelected ? 'var(--bg-hover)' : 'var(--bg-card)'
+                                }}
+                              >
+                                <div style={styles.taskItemHeader}>
+                                  <span style={{
+                                    ...styles.statusBadge,
+                                    background: t.status === 'COMPLETED' ? '#e2f9e1' : t.status === 'FAILED' ? '#ffebeb' : t.status === 'RUNNING' ? '#fff9db' : '#f1f3f5',
+                                    color: t.status === 'COMPLETED' ? '#1e7e34' : t.status === 'FAILED' ? '#bd2130' : t.status === 'RUNNING' ? '#d39e00' : '#495057'
+                                  }}>
+                                    {t.status}
+                                  </span>
+                                  <span style={styles.taskTime}>{new Date(t.created_at).toLocaleTimeString()}</span>
+                                </div>
+                                <p style={styles.taskItemProblem}>{t.problem_statement}</p>
+                                <div style={styles.taskItemFooter}>
+                                  <span>Agent: {t.assigned_agent_details?.name || 'Unassigned'}</span>
+                                  <span>By: {t.creator?.name || t.creator?.username}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
+                  </div>
+
+                  {/* Right Column: Task Detail View */}
+                  <div style={styles.tasksRightCol}>
+                    {selectedTaskId ? (
+                      (() => {
+                        const selectedTask = tasks.find(t => t.id === selectedTaskId);
+                        if (!selectedTask) return <p style={styles.taskEmptyText}>Task not found.</p>;
+                        const activeExec = selectedTask.executions?.[0];
+                        return (
+                          <div style={styles.taskDetailCard}>
+                            <h3 style={styles.detailTitle}>Task Details</h3>
+                            
+                            <div style={styles.detailField}>
+                              <label style={styles.detailLabel}>Problem Statement</label>
+                              <p style={styles.detailValueText}>{selectedTask.problem_statement}</p>
+                            </div>
+
+                            <div style={styles.detailGrid}>
+                              <div>
+                                <label style={styles.detailLabel}>Status</label>
+                                <div>
+                                  <span style={{
+                                    ...styles.statusBadge,
+                                    background: selectedTask.status === 'COMPLETED' ? '#e2f9e1' : selectedTask.status === 'FAILED' ? '#ffebeb' : selectedTask.status === 'RUNNING' ? '#fff9db' : '#f1f3f5',
+                                    color: selectedTask.status === 'COMPLETED' ? '#1e7e34' : selectedTask.status === 'FAILED' ? '#bd2130' : selectedTask.status === 'RUNNING' ? '#d39e00' : '#495057'
+                                  }}>
+                                    {selectedTask.status}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div>
+                                <label style={styles.detailLabel}>Agent Assigned</label>
+                                <span style={styles.detailValueText}>
+                                  {selectedTask.assigned_agent_details?.name || 'None'}
+                                </span>
+                              </div>
+
+                              {activeExec && (
+                                <>
+                                  <div>
+                                    <label style={styles.detailLabel}>Provider / Model</label>
+                                    <span style={styles.detailValueText}>
+                                      {selectedTask.assigned_agent_details?.provider} ({selectedTask.assigned_agent_details?.model})
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <label style={styles.detailLabel}>Execution Mode</label>
+                                    <div>
+                                      <span style={{
+                                        ...styles.statusBadge,
+                                        background: activeExec.mode === 'REAL' ? '#e8f4fd' : '#f8f9fa',
+                                        color: activeExec.mode === 'REAL' ? '#004085' : '#6c757d',
+                                        border: '1px solid var(--border-medium)'
+                                      }}>
+                                        {activeExec.mode}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+
+                            {/* Run Again Button */}
+                            {selectedTask.status !== 'RUNNING' && (
+                              <button
+                                onClick={() => handleExecuteTask(selectedTask.id)}
+                                className="action-btn"
+                                style={{ ...styles.actionBtn, marginTop: '16px', alignSelf: 'flex-start' }}
+                                disabled={executingTaskId !== null}
+                              >
+                                {executingTaskId ? 'Executing...' : 'Re-run Task'}
+                              </button>
+                            )}
+
+                            {/* Events Timeline */}
+                            <div style={{ marginTop: '24px' }}>
+                              <label style={styles.detailLabel}>Execution Timeline</label>
+                              <div style={styles.timelineList}>
+                                {selectedTask.events && selectedTask.events.length > 0 ? (
+                                  selectedTask.events.map(event => (
+                                    <div key={event.id} style={styles.timelineItem}>
+                                      <div style={styles.timelineItemHeader}>
+                                        <span style={styles.timelineType}>{event.event_type}</span>
+                                        <span style={styles.timelineTime}>
+                                          {new Date(event.timestamp).toLocaleTimeString()}
+                                        </span>
+                                      </div>
+                                      {event.metadata && Object.keys(event.metadata).length > 0 && (
+                                        <pre style={styles.timelineMeta}>
+                                          {JSON.stringify(event.metadata, null, 2)}
+                                        </pre>
+                                      )}
+                                    </div>
+                                  ))
+                                ) : (
+                                  <p style={styles.taskEmptyText}>No timeline events logged.</p>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Final Output Result */}
+                            {selectedTask.result && (
+                              <div style={styles.resultBox}>
+                                <label style={styles.detailLabel}>Result Output</label>
+                                <div style={styles.resultContent}>
+                                  {selectedTask.result}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <div style={styles.emptyDetailPanel}>
+                        <ClipboardList size={32} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
+                        <p style={styles.emptyPanelText}>Select a task to view execution details and outputs.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
             <div style={styles.emptyTabPanel}>
               <FolderPlus size={36} strokeWidth={1.25} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
@@ -1209,5 +1517,205 @@ const styles = {
     fontWeight: '600',
     cursor: 'pointer',
     fontSize: '11px',
-  }
+  },
+  tasksWrapper: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    width: '100%',
+  },
+  tasksContainer: {
+    display: 'flex',
+    gap: '24px',
+    height: 'calc(100vh - 180px)',
+    marginTop: '16px',
+    alignItems: 'stretch',
+  },
+  tasksLeftCol: {
+    flex: '1',
+    display: 'flex',
+    flexDirection: 'column',
+    overflowY: 'auto',
+    gap: '16px',
+  },
+  tasksRightCol: {
+    width: '450px',
+    display: 'flex',
+    flexDirection: 'column',
+    border: '1px solid var(--border-medium)',
+    borderRadius: 'var(--radius-md)',
+    background: 'var(--bg-card)',
+    padding: '20px',
+    overflowY: 'auto',
+  },
+  taskForm: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  taskTextarea: {
+    width: '100%',
+    padding: '12px',
+    borderRadius: 'var(--radius-sm)',
+    border: '1px solid var(--border-medium)',
+    background: 'var(--bg-input)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--text-sm)',
+    outline: 'none',
+    fontFamily: 'inherit',
+    resize: 'none',
+  },
+  taskList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  taskItem: {
+    padding: '16px',
+    borderRadius: 'var(--radius-sm)',
+    cursor: 'pointer',
+    transition: 'var(--transition-all)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  taskItemHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  taskTime: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-secondary)',
+  },
+  taskItemProblem: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-primary)',
+    margin: 0,
+    fontWeight: '500',
+  },
+  taskItemFooter: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: '11px',
+    color: 'var(--text-muted)',
+  },
+  statusBadge: {
+    fontSize: '10px',
+    fontWeight: '700',
+    padding: '3px 8px',
+    borderRadius: 'var(--radius-full)',
+    textTransform: 'uppercase',
+    display: 'inline-block',
+  },
+  taskDetailCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+    height: '100%',
+  },
+  detailTitle: {
+    fontSize: 'var(--text-lg)',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
+    margin: 0,
+    borderBottom: '1px solid var(--border-medium)',
+    paddingBottom: '12px',
+  },
+  detailField: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+  },
+  detailLabel: {
+    fontSize: 'var(--text-xs)',
+    fontWeight: '600',
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase',
+  },
+  detailValueText: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-primary)',
+    margin: 0,
+  },
+  detailGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '16px',
+  },
+  timelineList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    maxHeight: '180px',
+    overflowY: 'auto',
+    background: 'var(--bg-hover)',
+    padding: '12px',
+    borderRadius: 'var(--radius-sm)',
+  },
+  timelineItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    borderBottom: '1px solid var(--border-medium)',
+    paddingBottom: '8px',
+  },
+  timelineItemHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  timelineType: {
+    fontSize: '12px',
+    fontWeight: '600',
+    color: 'var(--text-primary)',
+  },
+  timelineTime: {
+    fontSize: '11px',
+    color: 'var(--text-muted)',
+  },
+  timelineMeta: {
+    fontSize: '10px',
+    color: 'var(--text-secondary)',
+    margin: 0,
+    background: 'var(--bg-card)',
+    padding: '6px',
+    borderRadius: '4px',
+    overflowX: 'auto',
+  },
+  resultBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    marginTop: '8px',
+  },
+  resultContent: {
+    background: 'var(--bg-hover)',
+    padding: '12px',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: 'var(--text-sm)',
+    lineHeight: '1.5',
+    color: 'var(--text-primary)',
+    fontFamily: 'var(--font-sans)',
+    whiteSpace: 'pre-wrap',
+  },
+  emptyDetailPanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '100%',
+    color: 'var(--text-muted)',
+  },
+  loadingText: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-secondary)',
+    textAlign: 'center',
+    margin: '20px 0',
+  },
+  taskEmptyText: {
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-muted)',
+    textAlign: 'center',
+    margin: '20px 0',
+  },
 };
