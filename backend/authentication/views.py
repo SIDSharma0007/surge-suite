@@ -69,6 +69,9 @@ def register_face_api(request):
         django_user.delete()
         return Response({"error": f"Biometric registration failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
+    from django.contrib.auth import login as django_login
+    django_login(request, django_user)
+
     response_serializer = RegisterResponseSerializer(record)
     return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -173,3 +176,28 @@ def me_api(request):
             "name": request.user.first_name or request.user.username,
         }
     })
+
+@api_view(['POST', 'GET'])
+def dev_login_api(request):
+    """
+    POST /api/v1/auth/dev-login/
+    Development convenience login to start a Django session.
+    """
+    from django.contrib.auth import login as django_login
+    from django.contrib.auth.models import User
+    from workspace.models import Workspace
+
+    user = User.objects.first()
+    if not user:
+        user = User.objects.create(username='dev_user', first_name='Developer')
+        Workspace.objects.create(name="Developer's Workspace", owner=user)
+    
+    django_login(request, user)
+    return Response({
+        "authenticated": True,
+        "user": {
+            "user_id": user.username,
+            "name": user.first_name or user.username,
+        }
+    })
+

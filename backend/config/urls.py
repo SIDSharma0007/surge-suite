@@ -18,9 +18,14 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 
+api_v1_patterns = [
+    path("", include("core.urls")),
+    path("auth/", include("authentication.urls")),
+    path("workspaces/", include("workspace.urls")),
+]
+
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("api/v1/", include("core.urls")),
-    path("api/v1/auth/", include("authentication.urls")),
-    path("api/v1/workspaces/", include("workspace.urls")),
+    path("api/v1/", include(api_v1_patterns)),
+    path("api/", include(api_v1_patterns)),
 ]

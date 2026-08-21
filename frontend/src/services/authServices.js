@@ -72,5 +72,15 @@ export const authServices = {
    */
   me() {
     return api.get('/auth/me/');
+  },
+
+  /**
+   * Quick development login helper to initiate a session.
+   * 
+   * @returns {Promise} Axios response promise.
+   */
+  devLogin() {
+    return api.post('/auth/dev-login/');
   }
 };
+

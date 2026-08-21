@@ -159,7 +159,34 @@ function Landing() {
                 </button>
               )}
             </div>
+
+            {/* Quick Development Login */}
+            <button 
+              type="button"
+              onClick={async () => {
+                try {
+                  const res = await authServices.devLogin();
+                  if (res.data?.authenticated) {
+                    login(res.data.user);
+                    navigate('/dashboard');
+                  }
+                } catch (e) {
+                  setErrorMessage('Dev login failed: ' + (e.message || 'Server error'));
+                }
+              }} 
+              style={{ 
+                ...styles.actionBtn, 
+                background: 'var(--bg-hover)', 
+                color: 'var(--text-secondary)',
+                border: '1px dashed var(--border-medium)',
+                marginTop: '12px',
+                width: '100%'
+              }}
+            >
+              ⚡ Quick Dev Login
+            </button>
           </div>
+
         ) : (
           <div style={styles.offlineCard}>
             <WifiOff size={28} strokeWidth={1.5} style={{ color: 'var(--text-muted)', marginBottom: 'var(--space-4)' }} />

@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useWorkspace } from '../context/WorkspaceContext';
 import ThemeToggle from '../components/ThemeToggle';
+import WorkspaceSelector from '../components/workspace/WorkspaceSelector';
+import WorkspaceMembersModal from '../components/workspace/WorkspaceMembersModal';
 import Notes from './Notes.jsx';
+
 import { workspaceServices } from '../services/workspaceServices';
 import { 
   LayoutGrid, 
@@ -20,7 +24,9 @@ import {
   Zap,
   Database,
   AlertCircle,
-  Archive
+  Archive,
+  ShieldCheck,
+  User as UserIcon
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -28,23 +34,33 @@ export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('Workspaces');
 
-  // Real-time states representing workspaces
-  const [workspaces, setWorkspaces] = useState([]);
-  const [archivedWorkspaces, setArchivedWorkspaces] = useState([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => {
-    return localStorage.getItem('surge_active_workspace_id') || '';
-  });
-  const [workspaceError, setWorkspaceError] = useState(null);
+  // Consume global WorkspaceContext
+  const {
+    workspaces,
+    archivedWorkspaces,
+    activeWorkspace,
+    activeWorkspaceId,
+    currentRole,
+    isOwner: isCurrentOwner,
+    isLoading: isWorkspaceLoading,
+    error: workspaceError,
+    clearError: clearWorkspaceError,
+    fetchWorkspaces,
+    selectWorkspace,
+    createWorkspace,
+    renameWorkspace,
+    archiveWorkspace,
+    restoreWorkspace
+  } = useWorkspace();
+
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [editingWorkspaceId, setEditingWorkspaceId] = useState(null);
   const [editingWorkspaceName, setEditingWorkspaceName] = useState('');
+  const [localActionError, setLocalActionError] = useState(null);
 
   // Membership modal states
   const [membersModalOpen, setMembersModalOpen] = useState(false);
   const [membersWorkspace, setMembersWorkspace] = useState(null);
-  const [membersList, setMembersList] = useState([]);
-  const [allUsersList, setAllUsersList] = useState([]);
-  const [selectedUserToAdd, setSelectedUserToAdd] = useState('');
 
   const [pinnedFiles, setPinnedFiles] = useState([]);
 
@@ -58,99 +74,97 @@ export default function Dashboard() {
     return diffDays > 0 ? diffDays : 0;
   };
 
-  // Manage frontend-only list of active notes
-  const [notes, setNotes] = useState(() => {
-    const saved = localStorage.getItem('surge_notes');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Failed to parse local notes:", e);
-      }
-    }
-    return [
-      {
-        id: 'welcome-note',
-        title: 'Welcome to Surge Notes',
-        body: '<div>This is a premium monochrome notes writing workspace.</div><div>Feel free to format text, add lists, or insert links!</div>',
-        isPinned: false,
-        color: 'default',
-        tags: ['#welcome', '#guide'],
-        updatedAt: new Date().toISOString()
-      }
-    ];
-  });
+  // Storage key helpers for workspace-scoped data isolation
+  const getNotesStorageKey = (wsId) => (wsId ? `surge_notes_${wsId}` : 'surge_notes_default');
+  const getBinStorageKey = (wsId) => (wsId ? `surge_notes_bin_${wsId}` : 'surge_notes_bin_default');
 
-  // Manage frontend-only list of deleted notes (Trash Bin)
-  const [deletedNotes, setDeletedNotes] = useState(() => {
-    const saved = localStorage.getItem('surge_notes_bin');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Failed to parse local bin notes:", e);
-      }
+  const getDefaultNotesForWorkspace = (ws) => [
+    {
+      id: `welcome-${ws?.id || 'default'}`,
+      title: `Welcome to ${ws?.name || 'Workspace'}`,
+      body: `<div>This is your isolated notes repository for <strong>${ws?.name || 'this workspace'}</strong>.</div><div>All notes created here are private to this workspace.</div>`,
+      isPinned: false,
+      color: 'default',
+      tags: ['#workspace', '#notes'],
+      updatedAt: new Date().toISOString()
     }
-    return [];
-  });
+  ];
 
+  // Workspace-scoped active notes state
+  const [notes, setNotes] = useState([]);
+  // Workspace-scoped trash bin state
+  const [deletedNotes, setDeletedNotes] = useState([]);
   const [activeNoteId, setActiveNoteId] = useState(null);
 
-  // Sync active notes to localStorage
+  // Reactive reload when active workspace changes
+  useEffect(() => {
+    if (!activeWorkspaceId) {
+      setNotes([]);
+      setDeletedNotes([]);
+      setActiveNoteId(null);
+      return;
+    }
+
+    const storageKey = getNotesStorageKey(activeWorkspaceId);
+    const binKey = getBinStorageKey(activeWorkspaceId);
+
+    // Load active notes for this workspace
+    const savedNotes = localStorage.getItem(storageKey);
+    if (savedNotes) {
+      try {
+        setNotes(JSON.parse(savedNotes));
+      } catch (e) {
+        console.error("Failed to parse workspace notes:", e);
+        setNotes(getDefaultNotesForWorkspace(activeWorkspace));
+      }
+    } else {
+      const defaultNotes = getDefaultNotesForWorkspace(activeWorkspace);
+      setNotes(defaultNotes);
+      localStorage.setItem(storageKey, JSON.stringify(defaultNotes));
+    }
+
+    // Load trash bin notes for this workspace with 30-day auto-purge
+    const savedBin = localStorage.getItem(binKey);
+    if (savedBin) {
+      try {
+        const parsedBin = JSON.parse(savedBin);
+        const pruned = parsedBin.filter(n => getRemainingDays(n.deletedAt) > 0);
+        setDeletedNotes(pruned);
+      } catch (e) {
+        console.error("Failed to parse workspace bin notes:", e);
+        setDeletedNotes([]);
+      }
+    } else {
+      setDeletedNotes([]);
+    }
+
+    setActiveNoteId(null);
+  }, [activeWorkspaceId, activeWorkspace?.name]);
+
+  // Sync active notes to scoped workspace storage
   const saveNotes = (updatedNotes) => {
     setNotes(updatedNotes);
-    localStorage.setItem('surge_notes', JSON.stringify(updatedNotes));
+    const key = getNotesStorageKey(activeWorkspaceId);
+    localStorage.setItem(key, JSON.stringify(updatedNotes));
   };
 
-  // Sync bin notes to localStorage
+  // Sync bin notes to scoped workspace storage
   const saveBinNotes = (updatedBinNotes) => {
     setDeletedNotes(updatedBinNotes);
-    localStorage.setItem('surge_notes_bin', JSON.stringify(updatedBinNotes));
+    const key = getBinStorageKey(activeWorkspaceId);
+    localStorage.setItem(key, JSON.stringify(updatedBinNotes));
   };
 
-  const fetchWorkspaces = async () => {
-    try {
-      setWorkspaceError(null);
-      const res = await workspaceServices.list();
-      setWorkspaces(res.data);
-      
-      const archivedRes = await workspaceServices.listArchived();
-      setArchivedWorkspaces(archivedRes.data);
-      
-      // Auto active workspace selection
-      if (res.data.length > 0) {
-        const found = res.data.find(w => w.id === activeWorkspaceId);
-        if (!found) {
-          setActiveWorkspaceId(res.data[0].id);
-          localStorage.setItem('surge_active_workspace_id', res.data[0].id);
-        }
-      } else {
-        setActiveWorkspaceId('');
-        localStorage.removeItem('surge_active_workspace_id');
-      }
-    } catch (err) {
-      console.error("Failed to fetch workspaces:", err);
-      setWorkspaceError("Failed to load workspaces. Please check connection.");
-    }
-  };
-
-  useEffect(() => {
-    fetchWorkspaces();
-  }, []);
 
   const handleCreateWorkspace = async (e) => {
     e.preventDefault();
     if (!newWorkspaceName.trim()) return;
     try {
-      setWorkspaceError(null);
-      const res = await workspaceServices.create({ name: newWorkspaceName });
+      setLocalActionError(null);
+      await createWorkspace(newWorkspaceName.trim());
       setNewWorkspaceName('');
-      await fetchWorkspaces();
-      setActiveWorkspaceId(res.data.id);
-      localStorage.setItem('surge_active_workspace_id', res.data.id);
     } catch (err) {
-      const msg = err.response?.data?.error || "Failed to create workspace.";
-      setWorkspaceError(msg);
+      setLocalActionError(err.message || "Failed to create workspace.");
     }
   };
 
@@ -162,87 +176,44 @@ export default function Dashboard() {
   const handleSaveRename = async (id) => {
     if (!editingWorkspaceName.trim()) return;
     try {
-      setWorkspaceError(null);
-      await workspaceServices.update(id, { name: editingWorkspaceName });
+      setLocalActionError(null);
+      await renameWorkspace(id, editingWorkspaceName.trim());
       setEditingWorkspaceId(null);
-      await fetchWorkspaces();
     } catch (err) {
-      setWorkspaceError(err.response?.data?.error || "Failed to rename workspace.");
+      setLocalActionError(err.message || "Failed to rename workspace.");
     }
   };
 
-  const handleArchiveWorkspace = async (id) => {
+  const handleArchiveWorkspace = async (ws) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to archive "${ws.name}"?\n\n• It will be moved to the Recovery Bin for 30 days before permanent deletion.\n• It will still count towards your 5-workspace limit until restored or permanently deleted.`
+    );
+    if (!confirmed) return;
+
     try {
-      setWorkspaceError(null);
-      await workspaceServices.archive(id);
-      await fetchWorkspaces();
+      setLocalActionError(null);
+      await archiveWorkspace(ws.id);
     } catch (err) {
-      setWorkspaceError(err.response?.data?.error || "Failed to archive workspace.");
+      setLocalActionError(err.message || "Failed to archive workspace.");
     }
   };
+
 
   const handleRestoreWorkspace = async (id) => {
     try {
-      setWorkspaceError(null);
-      await workspaceServices.restore(id);
-      await fetchWorkspaces();
+      setLocalActionError(null);
+      await restoreWorkspace(id);
     } catch (err) {
-      setWorkspaceError(err.response?.data?.error || "Failed to restore workspace.");
+      setLocalActionError(err.message || "Failed to restore workspace.");
     }
   };
 
-  const handleOpenMembers = async (ws) => {
-    try {
-      setWorkspaceError(null);
-      setMembersWorkspace(ws);
-      const membersRes = await workspaceServices.listMembers(ws.id);
-      setMembersList(membersRes.data);
-      const usersRes = await workspaceServices.listAllUsers();
-      setAllUsersList(usersRes.data);
-      setMembersModalOpen(true);
-    } catch (err) {
-      setWorkspaceError("Failed to open membership dashboard.");
-    }
+  const handleOpenMembers = (ws) => {
+    setMembersWorkspace(ws);
+    setMembersModalOpen(true);
   };
 
-  const handleAddMember = async () => {
-    if (!selectedUserToAdd) return;
-    try {
-      setWorkspaceError(null);
-      await workspaceServices.addMember(membersWorkspace.id, { user_id: selectedUserToAdd });
-      setSelectedUserToAdd('');
-      // Reload members
-      const membersRes = await workspaceServices.listMembers(membersWorkspace.id);
-      setMembersList(membersRes.data);
-    } catch (err) {
-      const msg = err.response?.data?.error || "Failed to add member.";
-      setWorkspaceError(msg);
-    }
-  };
 
-  const handleRemoveMember = async (userId) => {
-    try {
-      setWorkspaceError(null);
-      await workspaceServices.removeMember(membersWorkspace.id, userId);
-      // Reload members
-      const membersRes = await workspaceServices.listMembers(membersWorkspace.id);
-      setMembersList(membersRes.data);
-    } catch (err) {
-      setWorkspaceError("Failed to remove member.");
-    }
-  };
-
-  // Boot-time auto-purge for items older than 30 days
-  useEffect(() => {
-    const parsed = deletedNotes;
-    const pruned = parsed.filter(n => {
-      const daysLeft = getRemainingDays(n.deletedAt);
-      return daysLeft > 0;
-    });
-    if (pruned.length !== parsed.length) {
-      saveBinNotes(pruned);
-    }
-  }, []);
 
   const handleCreateNote = () => {
     const newNote = {
@@ -372,6 +343,14 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Workspace Selector Dropdown */}
+        <div style={{ padding: '0 12px 14px 12px' }}>
+          <WorkspaceSelector onOpenArchived={() => {
+            setActiveTab('Workspaces');
+            setSidebarOpen(false);
+          }} />
+        </div>
+
         <nav style={styles.sidebarNav}>
           {[
             { name: 'Workspaces', icon: LayoutGrid },
@@ -443,10 +422,10 @@ export default function Dashboard() {
                 <p style={styles.greetingSubtitle}>Manage and organize your team workspaces and access limits.</p>
               </header>
 
-              {workspaceError && (
+              {(workspaceError || localActionError) && (
                 <div style={styles.errorAlert}>
                   <AlertCircle size={15} style={{ marginRight: '8px', flexShrink: 0 }} />
-                  {workspaceError}
+                  {localActionError || workspaceError}
                 </div>
               )}
 
@@ -463,18 +442,18 @@ export default function Dashboard() {
                     onChange={(e) => setNewWorkspaceName(e.target.value)}
                     placeholder="Enter workspace name"
                     style={styles.textInput}
-                    disabled={workspaces.filter(w => w.owner.username === username).length >= 5}
+                    disabled={workspaces.filter(w => w.role === 'OWNER').length >= 5}
                   />
                   <button 
                     type="submit" 
                     style={styles.actionBtn}
-                    disabled={workspaces.filter(w => w.owner.username === username).length >= 5}
+                    disabled={workspaces.filter(w => w.role === 'OWNER').length >= 5 || !newWorkspaceName.trim()}
                   >
                     <Plus size={14} style={{ marginRight: '6px' }} />
                     Create
                   </button>
                 </form>
-                {workspaces.filter(w => w.owner.username === username).length >= 5 && (
+                {workspaces.filter(w => w.role === 'OWNER').length >= 5 && (
                   <p style={{ color: 'var(--status-error)', fontSize: '12px', marginTop: '8px' }}>
                     * You have reached the maximum limit of 5 owned workspaces (including archived ones).
                   </p>
@@ -492,7 +471,7 @@ export default function Dashboard() {
                   <div style={styles.workspaceGrid}>
                     {workspaces.map(ws => {
                       const isEditing = editingWorkspaceId === ws.id;
-                      const isOwner = ws.owner.username === username;
+                      const isOwner = ws.role === 'OWNER';
                       const isActive = activeWorkspaceId === ws.id;
                       
                       return (
@@ -524,17 +503,14 @@ export default function Dashboard() {
                           </div>
                           
                           <div style={styles.workspaceMeta}>
-                            <p style={styles.metaText}><strong>Owner:</strong> {ws.owner.first_name || ws.owner.username}</p>
+                            <p style={styles.metaText}><strong>Owner:</strong> {ws.owner?.first_name || ws.owner?.username || 'Owner'}</p>
                             <p style={styles.metaText}><strong>Your Role:</strong> {ws.role}</p>
                           </div>
 
                           <div style={styles.workspaceActions}>
                             {!isActive && (
                               <button 
-                                onClick={() => {
-                                  setActiveWorkspaceId(ws.id);
-                                  localStorage.setItem('surge_active_workspace_id', ws.id);
-                                }} 
+                                onClick={() => selectWorkspace(ws.id)} 
                                 style={styles.selectBtn}
                               >
                                 Select Workspace
@@ -548,7 +524,7 @@ export default function Dashboard() {
                                 <button onClick={() => handleOpenMembers(ws)} style={styles.iconBtn} title="Manage Members">
                                   Members
                                 </button>
-                                <button onClick={() => handleArchiveWorkspace(ws.id)} style={{ ...styles.iconBtn, color: 'var(--status-error)' }} title="Archive Workspace">
+                                <button onClick={() => handleArchiveWorkspace(ws)} style={{ ...styles.iconBtn, color: 'var(--status-error)' }} title="Archive Workspace">
                                   Archive
                                 </button>
                               </>
@@ -568,76 +544,49 @@ export default function Dashboard() {
                 <section style={{ ...styles.section, marginTop: '32px' }}>
                   <div style={styles.sectionHeader}>
                     <Archive size={14} style={{ color: 'var(--text-muted)', marginRight: '8px' }} />
-                    <h3 style={styles.sectionTitle}>Archived Workspaces</h3>
+                    <h3 style={styles.sectionTitle}>Archived Workspaces ({archivedWorkspaces.length})</h3>
                   </div>
                   <div style={styles.workspaceGrid}>
-                    {archivedWorkspaces.map(ws => (
-                      <div key={ws.id} style={{ ...styles.workspaceCard, opacity: 0.7, background: 'rgba(0,0,0,0.02)' }}>
-                        <div style={styles.workspaceCardHeader}>
-                          <h4 style={styles.workspaceCardTitle}>{ws.name}</h4>
-                          <span style={{ ...styles.activeLabel, background: 'var(--border-medium)', color: 'var(--text-secondary)' }}>Archived</span>
+                    {archivedWorkspaces.map(ws => {
+                      const daysLeft = Math.max(0, Math.ceil((new Date(ws.scheduled_deletion_at) - new Date()) / (1000 * 60 * 60 * 24)));
+                      return (
+                        <div key={ws.id} style={{ ...styles.workspaceCard, opacity: 0.85, background: 'var(--bg-hover)' }}>
+                          <div style={styles.workspaceCardHeader}>
+                            <h4 style={styles.workspaceCardTitle}>{ws.name}</h4>
+                            <span style={{ 
+                              ...styles.activeLabel, 
+                              background: daysLeft <= 5 ? 'rgba(239, 68, 68, 0.1)' : 'var(--border-medium)', 
+                              color: daysLeft <= 5 ? 'var(--status-error)' : 'var(--text-secondary)' 
+                            }}>
+                              {daysLeft} days left
+                            </span>
+                          </div>
+                          <div style={styles.workspaceMeta}>
+                            <p style={styles.metaText}><strong>Archived:</strong> {ws.archived_at ? new Date(ws.archived_at).toLocaleDateString() : 'Recently'}</p>
+                            <p style={styles.metaText}><strong>Auto-deletion:</strong> {ws.scheduled_deletion_at ? new Date(ws.scheduled_deletion_at).toLocaleDateString() : 'In 30 days'}</p>
+                          </div>
+                          <div style={styles.workspaceActions}>
+                            <button onClick={() => handleRestoreWorkspace(ws.id)} style={styles.selectBtn}>
+                              Restore Workspace
+                            </button>
+                          </div>
                         </div>
-                        <div style={styles.workspaceMeta}>
-                          <p style={styles.metaText}>Archived on: {new Date(ws.archived_at).toLocaleDateString()}</p>
-                          <p style={styles.metaText}>Permanent deletion: {new Date(ws.scheduled_deletion_at).toLocaleDateString()}</p>
-                        </div>
-                        <div style={styles.workspaceActions}>
-                          <button onClick={() => handleRestoreWorkspace(ws.id)} style={styles.selectBtn}>
-                            Restore Workspace
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </section>
               )}
 
-              {/* Members Management Modal */}
-              {membersModalOpen && membersWorkspace && (
-                <div style={styles.modalOverlay}>
-                  <div style={styles.modalContent}>
-                    <h3 style={styles.modalTitle}>Manage Members for "{membersWorkspace.name}"</h3>
-                    
-                    <div style={{ marginBottom: '16px' }}>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>Add New Member</label>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <select
-                          value={selectedUserToAdd}
-                          onChange={(e) => setSelectedUserToAdd(e.target.value)}
-                          style={styles.selectInput}
-                        >
-                          <option value="">Select a user...</option>
-                          {allUsersList.map(u => (
-                            <option key={u.id} value={u.id}>{u.first_name || u.username}</option>
-                          ))}
-                        </select>
-                        <button onClick={handleAddMember} style={styles.actionBtn}>Add</button>
-                      </div>
-                    </div>
 
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>Current Members</label>
-                    <div style={styles.membersList}>
-                      {membersList.length > 0 ? (
-                        membersList.map(mem => (
-                          <div key={mem.id} style={styles.memberRow}>
-                            <span>{mem.user.first_name || mem.user.username} ({mem.role})</span>
-                            <button onClick={() => handleRemoveMember(mem.user.id)} style={styles.removeBtn}>Remove</button>
-                          </div>
-                        ))
-                      ) : (
-                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No members added yet.</p>
-                      )}
-                    </div>
-
-                    <button 
-                      onClick={() => setMembersModalOpen(false)} 
-                      style={{ ...styles.actionBtn, width: '100%', marginTop: '20px', background: 'var(--bg-hover)', color: 'var(--text-primary)' }}
-                    >
-                      Close Dashboard
-                    </button>
-                  </div>
-                </div>
-              )}
+              {/* Modular Workspace Members Modal */}
+              <WorkspaceMembersModal
+                isOpen={membersModalOpen}
+                onClose={() => {
+                  setMembersModalOpen(false);
+                  setMembersWorkspace(null);
+                }}
+                workspace={membersWorkspace}
+              />
 
             </div>
           ) : activeTab === 'Notes' ? (

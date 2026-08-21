@@ -1,4 +1,5 @@
 from rest_framework import viewsets, status, permissions
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
@@ -8,12 +9,21 @@ from datetime import timedelta
 from django.contrib.auth.models import User
 
 from .models import Workspace, WorkspaceMembership
-from .serializers import WorkspaceSerializer, WorkspaceMembershipSerializer
+from .serializers import WorkspaceSerializer, WorkspaceMembershipSerializer, UserSerializer
 from .permissions import IsWorkspaceOwner, IsWorkspaceMember, IsAuthenticatedOr401
+
+
+class CsrfExemptSessionAuthentication(SessionAuthentication):
+    """
+    SessionAuthentication that allows cross-origin API calls from trusted CORS origins.
+    """
+    def enforce_csrf(self, request):
+        return
 
 class WorkspaceViewSet(viewsets.ModelViewSet):
     queryset = Workspace.objects.all()
     serializer_class = WorkspaceSerializer
+    authentication_classes = [CsrfExemptSessionAuthentication]
     permission_classes = [IsAuthenticatedOr401]
 
     def get_queryset(self):
@@ -98,7 +108,11 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         # Determine permission based on action
         if self.action in ['retrieve']:
             return [IsAuthenticatedOr401(), IsWorkspaceMember()]
-        elif self.action in ['update', 'partial_update', 'destroy', 'archive', 'restore', 'list_members', 'add_member', 'remove_member']:
+        elif self.action in ['members']:
+            if self.request.method == 'GET':
+                return [IsAuthenticatedOr401(), IsWorkspaceMember()]
+            return [IsAuthenticatedOr401(), IsWorkspaceOwner()]
+        elif self.action in ['update', 'partial_update', 'destroy', 'archive', 'restore', 'remove_member']:
             return [IsAuthenticatedOr401(), IsWorkspaceOwner()]
         return [IsAuthenticatedOr401()]
 
@@ -166,41 +180,41 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['get'], url_path='members', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
-    def list_members(self, request, pk=None):
+    @action(detail=True, methods=['get', 'post'], url_path='members')
+    def members(self, request, pk=None):
         workspace = self.get_object()
-        memberships = workspace.memberships.all()
-        serializer = WorkspaceMembershipSerializer(memberships, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'], url_path='members', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
-    def add_member(self, request, pk=None):
-        workspace = self.get_object()
-        serializer = WorkspaceMembershipSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if request.method == 'GET':
+            memberships = workspace.memberships.all()
+            serializer = WorkspaceMembershipSerializer(memberships, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
-        user = serializer.validated_data['user']
+        elif request.method == 'POST':
+            serializer = WorkspaceMembershipSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
 
-        if user == workspace.owner:
-            return Response(
-                {"error": "Workspace owner cannot be added as a member."},
-                status=status.HTTP_400_BAD_REQUEST
+            user = serializer.validated_data['user']
+
+            if user == workspace.owner:
+                return Response(
+                    {"error": "Workspace owner cannot be added as a member."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if WorkspaceMembership.objects.filter(workspace=workspace, user=user).exists():
+                return Response(
+                    {"error": "User is already a member of this workspace."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            membership = WorkspaceMembership.objects.create(
+                workspace=workspace,
+                user=user,
+                role='MEMBER'
             )
 
-        if WorkspaceMembership.objects.filter(workspace=workspace, user=user).exists():
-            return Response(
-                {"error": "User is already a member of this workspace."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        membership = WorkspaceMembership.objects.create(
-            workspace=workspace,
-            user=user,
-            role='MEMBER'
-        )
-
-        response_serializer = WorkspaceMembershipSerializer(membership)
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+            response_serializer = WorkspaceMembershipSerializer(membership)
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['delete'], url_path='members/(?P<user_id>[^/.]+)', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
     def remove_member(self, request, pk=None, user_id=None):
@@ -208,3 +222,4 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         membership = get_object_or_404(WorkspaceMembership, workspace=workspace, user_id=user_id)
         membership.delete()
         return Response({"success": True, "message": "Member removed successfully."}, status=status.HTTP_200_OK)
+

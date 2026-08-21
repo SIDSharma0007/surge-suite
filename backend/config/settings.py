@@ -86,9 +86,18 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 import urllib.parse
 
+# DEV NOTE: Set USE_SQLITE=True in .env to run locally without PostgreSQL. Remove or set to False for production/PostgreSQL.
+USE_SQLITE = config("USE_SQLITE", default=True, cast=bool)
 DATABASE_URL = config("DATABASE_URL", default="")
 
-if DATABASE_URL:
+if USE_SQLITE:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
+elif DATABASE_URL:
     url = urllib.parse.urlparse(DATABASE_URL)
     DATABASES = {
         "default": {
@@ -171,4 +180,4 @@ SESSION_COOKIE_AGE = config("SESSION_COOKIE_AGE", default=1209600, cast=int)
 CSRF_TRUSTED_ORIGINS = config(
     "CSRF_TRUSTED_ORIGINS",
     default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
-).split(",")
+).split(",")

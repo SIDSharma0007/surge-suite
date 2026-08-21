@@ -1,7 +1,10 @@
 import axios from 'axios';
 
-// Get the base API URL from environment variables, defaulting to local Django API
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+// API Base URL - uses Vite proxy in dev for flawless same-origin cookie transmission
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
+
+
 
 // Helper to retrieve the auth token (returns null for now, change this line to add auth token later)
 const getAuthToken = () => null; // e.g., () => localStorage.getItem('token');
