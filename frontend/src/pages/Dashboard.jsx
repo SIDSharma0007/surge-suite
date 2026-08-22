@@ -962,6 +962,17 @@ export default function Dashboard() {
                                       {execMode}
                                     </span>
                                   </div>
+
+                                  <div style={styles.detailRow}>
+                                    <span style={styles.detailTableLabel}>Capabilities</span>
+                                    <span style={styles.detailTableValue}>
+                                      {(() => {
+                                        const mcpEvent = selectedTask.events?.find(e => e.event_type === 'MCP_DISCOVERY_COMPLETED');
+                                        const count = mcpEvent?.metadata?.tools_discovered?.length || 0;
+                                        return count > 0 ? `${count} MCP tools discovered` : 'No MCP tools discovered';
+                                      })()}
+                                    </span>
+                                  </div>
                                 </div>
 
                                 {/* Final Output Result */}
@@ -1016,8 +1027,13 @@ export default function Dashboard() {
                                             AGENT_SELECTED: "Agent selected",
                                             EXECUTION_STARTED: "Execution started",
                                             TOOL_DISCOVERED: "Capabilities discovered",
-                                            TOOL_STARTED: "Tool execution started",
-                                            TOOL_COMPLETED: "Tool execution completed",
+                                            MCP_DISCOVERY_STARTED: "Starting MCP tool discovery",
+                                            MCP_DISCOVERY_COMPLETED: "Discovered MCP tools",
+                                            TOOL_SELECTED: "Tool selected",
+                                            TOOL_STARTED: "Running tool",
+                                            TOOL_COMPLETED: "Tool completed",
+                                            TOOL_FAILED: "Tool execution failed",
+                                            FALLBACK_SELECTED: "Safe fallback selected",
                                             FINAL_RESPONSE_GENERATED: "Final response generated",
                                             EXECUTION_COMPLETED: "Execution completed",
                                             EXECUTION_FAILED: "Execution failed",
@@ -1028,10 +1044,18 @@ export default function Dashboard() {
                                           let base = titles[event.event_type] || event.event_type;
                                           if (event.event_type === 'AGENT_SELECTED' && event.metadata?.agent_name) {
                                             base = `${event.metadata.agent_name} selected`;
+                                          } else if (event.event_type === 'MCP_DISCOVERY_COMPLETED' && event.metadata?.tools_discovered) {
+                                            base = `Discovered ${event.metadata.tools_discovered.length} MCP tools`;
+                                          } else if (event.event_type === 'TOOL_SELECTED' && event.metadata?.tool_name) {
+                                            base = `Tool selected: ${event.metadata.tool_name}`;
                                           } else if (event.event_type === 'TOOL_STARTED' && event.metadata?.tool_name) {
-                                            base = `Tool execution started: ${event.metadata.tool_name}`;
+                                            base = `Running tool: ${event.metadata.tool_name}`;
                                           } else if (event.event_type === 'TOOL_COMPLETED' && event.metadata?.tool_name) {
                                             base = `Tool completed: ${event.metadata.tool_name}`;
+                                          } else if (event.event_type === 'TOOL_FAILED' && event.metadata?.tool_name) {
+                                            base = `Tool execution failed: ${event.metadata.tool_name}`;
+                                          } else if (event.event_type === 'FALLBACK_SELECTED' && event.metadata?.tool_name) {
+                                            base = `Safe fallback selected: ${event.metadata.tool_name}`;
                                           } else if (event.event_type === 'EXECUTION_FAILED' && event.metadata?.error) {
                                             base = `Execution failed: ${event.metadata.error}`;
                                           }

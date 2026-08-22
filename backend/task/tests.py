@@ -191,7 +191,8 @@ class AgentAndTaskTestCase(TestCase):
             'TASK_CREATED',
             'AGENT_SELECTED',
             'EXECUTION_STARTED',
-            'TOOL_DISCOVERED',
+            'MCP_DISCOVERY_STARTED',
+            'MCP_DISCOVERY_COMPLETED',
             'ACTION_STARTED',
             'ACTION_COMPLETED',
             'FINAL_RESPONSE_GENERATED',
@@ -548,16 +549,42 @@ class ProviderCredentialsTestCase(TestCase):
         )
 
         exec_service = ExecutionService()
-        execution = exec_service.execute_task(task, user=self.user_a)
+        # Mock registry discovery so it doesn't spawn real servers for this request test
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{
+                "name": "filesystem.list_directory",
+                "server": "filesystem",
+                "description": "List files",
+                "input_schema": {},
+                "type": "mcp"
+            }]
+            mock_registry_inst.tools = {
+                "filesystem.list_directory": (MagicMock(), {
+                    "name": "filesystem.list_directory",
+                    "server": "filesystem",
+                    "description": "List files",
+                    "input_schema": {},
+                    "type": "mcp",
+                    "original_name": "list_directory"
+                })
+            }
+            mock_registry_inst.execute_tool.return_value = {"result": "manage.py"}
+            mock_registry_class.return_value = mock_registry_inst
 
-        self.assertEqual(execution.status, 'COMPLETED')
-        self.assertEqual(execution.result, "I found these files: manage.py")
+            execution = exec_service.execute_task(task, user=self.user_a)
 
-        # Verify tool started and completed events exist
-        events = ExecutionEvent.objects.filter(task=task)
-        event_types = [e.event_type for e in events]
-        self.assertIn('TOOL_STARTED', event_types)
-        self.assertIn('TOOL_COMPLETED', event_types)
+            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(execution.result, "I found these files: manage.py")
+
+            # Verify events logged
+            events = ExecutionEvent.objects.filter(task=task)
+            event_types = [e.event_type for e in events]
+            self.assertIn('MCP_DISCOVERY_STARTED', event_types)
+            self.assertIn('MCP_DISCOVERY_COMPLETED', event_types)
+            self.assertIn('TOOL_SELECTED', event_types)
+            self.assertIn('TOOL_STARTED', event_types)
+            self.assertIn('TOOL_COMPLETED', event_types)
 
     def test_bash_fallback_security(self):
         from task.services.capability_registry import CapabilityRegistry
@@ -576,17 +603,129 @@ class ProviderCredentialsTestCase(TestCase):
         res_del = registry.execute_tool("bash.execute", {"command": "rm -f file.txt"})
         self.assertIn("error", res_del)
 
+        # Env dump blocked
+        res_env = registry.execute_tool("bash.execute", {"command": "printenv"})
+        self.assertIn("error", res_env)
+
     def test_database_security(self):
         from task.services.capability_registry import CapabilityRegistry
         registry = CapabilityRegistry()
 
         # Destructive query is blocked
-        res_drop = registry.execute_tool("database.query", {"sql": "DROP TABLE workspace_workspace"})
+        res_drop = registry.execute_tool("builtin.database.query", {"sql": "DROP TABLE workspace_workspace"})
         self.assertIn("error", res_drop)
 
-        res_update = registry.execute_tool("database.query", {"sql": "UPDATE workspace_workspace SET name='Hacked'"})
+        res_update = registry.execute_tool("builtin.database.query", {"sql": "UPDATE workspace_workspace SET name='Hacked'"})
         self.assertIn("error", res_update)
 
-        # Non-select is blocked
-        res_insert = registry.execute_tool("database.query", {"sql": "INSERT INTO workspace_workspace (name) VALUES ('Hacked')"})
+        res_insert = registry.execute_tool("builtin.database.query", {"sql": "INSERT INTO workspace_workspace (name) VALUES ('Hacked')"})
         self.assertIn("error", res_insert)
+
+        res_pragma = registry.execute_tool("builtin.database.query", {"sql": "PRAGMA journal_mode=WAL"})
+        self.assertIn("error", res_pragma)
+
+
+class MCPLayerTestCase(TestCase):
+    def test_client_lifecycle_and_handshake(self):
+        from task.services.mcp.client import MCPClient
+        from task.services.mcp.config import PYTHON_EXECUTABLE, FILESYSTEM_SERVER_PATH
+        
+        client = MCPClient("filesystem", [PYTHON_EXECUTABLE, FILESYSTEM_SERVER_PATH])
+        client.start()
+        try:
+            # Send initialize handshake
+            res = client.send_request("initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "TestClient", "version": "1.0"}
+            })
+            self.assertNotIn("error", res)
+            self.assertEqual(res.get("result", {}).get("protocolVersion"), "2024-11-05")
+            
+            # Send list tools request
+            res_tools = client.send_request("tools/list")
+            self.assertNotIn("error", res_tools)
+            tools = res_tools.get("result", {}).get("tools", [])
+            tool_names = [t["name"] for t in tools]
+            self.assertIn("list_directory", tool_names)
+            
+            # Send call tool request
+            res_call = client.send_request("tools/call", {
+                "name": "list_directory",
+                "arguments": {"path": "."}
+            })
+            self.assertNotIn("error", res_call)
+            content = res_call.get("result", {}).get("content", [])
+            self.assertTrue(len(content) > 0)
+            self.assertEqual(content[0]["type"], "text")
+            self.assertIn("Files", content[0]["text"])
+            
+            # Path traversal rejection
+            res_traversal = client.send_request("tools/call", {
+                "name": "list_directory",
+                "arguments": {"path": "../../../.."}
+            })
+            self.assertNotIn("error", res_traversal)
+            self.assertTrue(res_traversal.get("result", {}).get("isError"))
+            
+        finally:
+            client.stop()
+
+    def test_mcp_registry_discovery(self):
+        from task.services.mcp.registry import MCPRegistry
+        registry = MCPRegistry()
+        registry.initialize_servers()
+        try:
+            tools = registry.discover_tools()
+            tool_names = [t["name"] for t in tools]
+            self.assertIn("filesystem.list_directory", tool_names)
+            self.assertIn("search.search_web", tool_names)
+            
+            # Verify normalized tool metadata
+            fs_tool = next(t for t in tools if t["name"] == "filesystem.list_directory")
+            self.assertEqual(fs_tool["server"], "filesystem")
+            self.assertEqual(fs_tool["type"], "mcp")
+            
+            # Run tool call
+            res = registry.execute_tool("filesystem.list_directory", {"path": "."})
+            self.assertNotIn("error", res)
+            self.assertIn("Files", res["result"])
+        finally:
+            registry.shutdown()
+
+    @patch('requests.post')
+    def test_agent_loop_direct_answer(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Simple multiplication result is 112"}]}}]
+        }
+        mock_post.return_value = mock_response
+
+        user = User.objects.create_user(username='agent_test_user', password='password')
+        from task.models import UserProviderCredential
+        from task.utils.encryption import encrypt_value
+        UserProviderCredential.objects.create(
+            user=user,
+            provider='gemini',
+            encrypted_api_key=encrypt_value('fake-key')
+        )
+        workspace = Workspace.objects.create(name="Agent Test Workspace", owner=user, ai_provider='gemini', ai_model='gemini-2.5-flash')
+        agent = Agent.objects.create(name="Gemini Agent", provider="gemini", model="gemini-2.5-flash")
+        
+        task = Task.objects.create(
+            workspace=workspace,
+            creator=user,
+            problem_statement="What is 56 * 2?",
+            assigned_agent=agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = []
+            mock_registry_class.return_value = mock_registry_inst
+            execution = exec_service.execute_task(task, user=user)
+            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(execution.result, "Simple multiplication result is 112")

@@ -1,6 +1,7 @@
 from django.utils import timezone
 from task.models import Task, TaskExecution, Action, ExecutionEvent
 from .model_provider import RealGeminiModelProvider, FakeModelProvider
+import json
 
 class ExecutionService:
     """
@@ -94,21 +95,69 @@ class ExecutionService:
             model=model_name
         )
 
+        from .mcp.registry import MCPRegistry
         from .capability_registry import CapabilityRegistry
-        registry = CapabilityRegistry()
-        capabilities = registry.discover_capabilities()
-        
-        # Build capabilities prompt text
-        capabilities_text = "\n".join([
-            f"- {cap['name']}: {cap['description']}. Arguments Schema: {cap['schema']}"
-            for cap in capabilities
-        ])
-        
+
+        # Log EXECUTION_STARTED event
+        ExecutionEvent.objects.create(
+            task=task,
+            execution=execution,
+            event_type='EXECUTION_STARTED',
+            metadata={'agent_id': str(agent.id), 'mode': execution.mode}
+        )
+
+        # Log MCP_DISCOVERY_STARTED
+        ExecutionEvent.objects.create(
+            task=task,
+            execution=execution,
+            event_type='MCP_DISCOVERY_STARTED',
+            metadata={'message': 'Discovering dynamic MCP tools...'}
+        )
+
+        mcp_registry = MCPRegistry()
+        mcp_registry.initialize_servers()
+        mcp_tools = mcp_registry.discover_tools()
+
+        # Log MCP_DISCOVERY_COMPLETED
+        ExecutionEvent.objects.create(
+            task=task,
+            execution=execution,
+            event_type='MCP_DISCOVERY_COMPLETED',
+            metadata={'tools_discovered': [t['name'] for t in mcp_tools]}
+        )
+
+        builtin_registry = CapabilityRegistry()
+        builtin_capabilities = builtin_registry.discover_capabilities()
+
+        # Format MCP capabilities
+        mcp_cap_texts = []
+        for t in mcp_tools:
+            mcp_cap_texts.append(
+                f"- Tool: {t['name']}\n"
+                f"  Type: mcp\n"
+                f"  Server: {t['server']}\n"
+                f"  Description: {t['description']}\n"
+                f"  Arguments Schema: {json.dumps(t['input_schema'])}"
+            )
+
+        # Format Builtin / Fallback capabilities
+        builtin_cap_texts = []
+        for c in builtin_capabilities:
+            builtin_cap_texts.append(
+                f"- Tool: {c['name']}\n"
+                f"  Type: {c['type']}\n"
+                f"  Description: {c['description']}\n"
+                f"  Arguments Schema: {json.dumps(c['schema'])}"
+            )
+
+        capabilities_text = "AVAILABLE MCP TOOLS:\n" + ("\n".join(mcp_cap_texts) if mcp_cap_texts else "None") + "\n\n"
+        capabilities_text += "AVAILABLE BUILTIN & FALLBACK TOOLS:\n" + ("\n".join(builtin_cap_texts) if builtin_cap_texts else "None")
+
         system_instruction = (
             "You are the Surge Suite task agent. Complete the user's task using the capabilities available to you.\n"
-            "Use a specialized MCP or builtin capability when it is useful.\n"
-            "Use bash.execute only when no suitable specialized capability exists or bash is genuinely the appropriate fallback.\n"
-            "Never invent tools.\n"
+            "MCP tools are preferred. Fallback tools should only be used when no suitable MCP capability exists.\n"
+            "Do NOT automatically invoke bash/fallback merely because an MCP tool failed.\n"
+            "If an MCP tool fails, report the failure and try an intelligent alternative.\n"
             "Never request, expose, or output API keys, credentials, passwords, tokens, environment variables, or secrets.\n\n"
             "To call a tool, you MUST respond ONLY with a JSON object in this format (do not output any other text or explanation):\n"
             "{\n"
@@ -126,22 +175,6 @@ class ExecutionService:
         prompt_with_history = (
             f"AVAILABLE TOOLS:\n{capabilities_text}\n\n"
             f"Task: {task.problem_statement}\n\n"
-        )
-
-        # Log EXECUTION_STARTED event
-        ExecutionEvent.objects.create(
-            task=task,
-            execution=execution,
-            event_type='EXECUTION_STARTED',
-            metadata={'agent_id': str(agent.id), 'mode': execution.mode}
-        )
-        
-        # Log TOOL_DISCOVERED event at startup
-        ExecutionEvent.objects.create(
-            task=task,
-            execution=execution,
-            event_type='TOOL_DISCOVERED',
-            metadata={'capabilities': [c['name'] for c in capabilities]}
         )
 
         step = 0
@@ -186,7 +219,6 @@ class ExecutionService:
                 execution.save()
 
                 # Parse tool call JSON if requested
-                import json
                 tool_call = None
                 clean_output = output.strip()
                 
@@ -218,6 +250,34 @@ class ExecutionService:
                         metadata={'action_id': str(action.id), 'status': 'COMPLETED'}
                     )
 
+                    # Determine tool types and log corresponding event
+                    is_mcp = tool_name in mcp_registry.tools
+                    is_builtin = tool_name in builtin_registry.capabilities
+
+                    if is_mcp:
+                        ExecutionEvent.objects.create(
+                            task=task,
+                            execution=execution,
+                            event_type='TOOL_SELECTED',
+                            metadata={'tool_name': tool_name, 'type': 'mcp'}
+                        )
+                    elif is_builtin:
+                        cap = builtin_registry.capabilities[tool_name]
+                        if cap.get("type") == "fallback":
+                            ExecutionEvent.objects.create(
+                                task=task,
+                                execution=execution,
+                                event_type='FALLBACK_SELECTED',
+                                metadata={'tool_name': tool_name}
+                            )
+                        else:
+                            ExecutionEvent.objects.create(
+                                task=task,
+                                execution=execution,
+                                event_type='TOOL_SELECTED',
+                                metadata={'tool_name': tool_name, 'type': 'builtin'}
+                            )
+
                     # Create TOOL_STARTED event
                     ExecutionEvent.objects.create(
                         task=task,
@@ -236,7 +296,12 @@ class ExecutionService:
                     )
 
                     # Execute tool
-                    tool_result = registry.execute_tool(tool_name, tool_args)
+                    if is_mcp:
+                        tool_result = mcp_registry.execute_tool(tool_name, tool_args)
+                    elif is_builtin:
+                        tool_result = builtin_registry.execute_tool(tool_name, tool_args)
+                    else:
+                        tool_result = {"error": f"Tool '{tool_name}' not found."}
 
                     # Sanitize tool results (remove any passwords, secrets)
                     tool_result_str = str(tool_result)
@@ -250,13 +315,21 @@ class ExecutionService:
                     tool_action.completed_at = timezone.now()
                     tool_action.save()
 
-                    # Create TOOL_COMPLETED event
-                    ExecutionEvent.objects.create(
-                        task=task,
-                        execution=execution,
-                        event_type='TOOL_COMPLETED',
-                        metadata={'tool_name': tool_name, 'status': 'COMPLETED', 'result_summary': str(tool_result)[:150]}
-                    )
+                    # Create TOOL_COMPLETED or TOOL_FAILED event
+                    if "error" in tool_result:
+                        ExecutionEvent.objects.create(
+                            task=task,
+                            execution=execution,
+                            event_type='TOOL_FAILED',
+                            metadata={'tool_name': tool_name, 'error': tool_result["error"]}
+                        )
+                    else:
+                        ExecutionEvent.objects.create(
+                            task=task,
+                            execution=execution,
+                            event_type='TOOL_COMPLETED',
+                            metadata={'tool_name': tool_name, 'status': 'COMPLETED', 'result_summary': str(tool_result)[:150]}
+                        )
 
                     # Append turn to conversation history
                     conversation_history.append(f"Model Request: {clean_output}")
@@ -341,5 +414,8 @@ class ExecutionService:
                 event_type='EXECUTION_FAILED',
                 metadata={'error': str(e)}
             )
+
+        finally:
+            mcp_registry.shutdown()
 
         return execution
