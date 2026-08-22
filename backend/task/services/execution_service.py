@@ -1,6 +1,6 @@
 from django.utils import timezone
 from task.models import Task, TaskExecution, Action, ExecutionEvent
-from .model_provider import RealGeminiModelProvider
+from .model_provider import RealGeminiModelProvider, FakeModelProvider
 
 class ExecutionService:
     """
@@ -11,7 +11,7 @@ class ExecutionService:
         # Defaults to the RealGeminiModelProvider, but allows FakeModelProvider injection
         self.provider = provider or RealGeminiModelProvider()
 
-    def execute_task(self, task):
+    def execute_task(self, task, user=None):
         if not task.assigned_agent:
             task.status = 'FAILED'
             task.save()
@@ -24,6 +24,62 @@ class ExecutionService:
 
         agent = task.assigned_agent
         
+        # Determine the model provider to use.
+        # If execution service was initialized with a specific provider override (e.g. FakeModelProvider for tests), we use it.
+        # Otherwise, we resolve it based on agent.provider.
+        is_override = self.provider and not isinstance(self.provider, RealGeminiModelProvider)
+        
+        if is_override:
+            model_provider = self.provider
+            is_real = not isinstance(self.provider, FakeModelProvider)
+            provider_name = 'simulated'
+            model_name = 'dev-mock'
+            resolved_key = None
+        else:
+            workspace = task.workspace
+            provider_name = workspace.ai_provider or 'simulated'
+            model_name = workspace.ai_model or 'dev-mock'
+            
+            from .model_provider import get_model_provider_by_name
+            model_provider, is_real = get_model_provider_by_name(provider_name)
+            
+            # Resolve key for real providers
+            if is_real:
+                from task.models import UserProviderCredential
+                from task.utils.encryption import decrypt_value
+                
+                target_user = user or task.creator
+                try:
+                    cred = UserProviderCredential.objects.get(user=target_user, provider=provider_name.lower())
+                    resolved_key = decrypt_value(cred.encrypted_api_key)
+                except UserProviderCredential.DoesNotExist:
+                    resolved_key = None
+                    
+                if not resolved_key:
+                    # Key is missing!
+                    task.status = 'FAILED'
+                    task.save()
+                    
+                    execution = TaskExecution.objects.create(
+                        task=task,
+                        agent=agent,
+                        status='FAILED',
+                        mode='REAL',
+                        provider=provider_name,
+                        model=model_name,
+                        error=f"Configure this provider under Settings → AI Providers."
+                    )
+                    
+                    ExecutionEvent.objects.create(
+                        task=task,
+                        execution=execution,
+                        event_type='EXECUTION_FAILED',
+                        metadata={'error': f"Configure this provider under Settings → AI Providers."}
+                    )
+                    return execution
+            else:
+                resolved_key = None
+
         # Transition Task to RUNNING state
         task.status = 'RUNNING'
         task.save()
@@ -32,7 +88,10 @@ class ExecutionService:
         execution = TaskExecution.objects.create(
             task=task,
             agent=agent,
-            status='RUNNING'
+            status='RUNNING',
+            mode='REAL' if is_real else 'SIMULATED',
+            provider=provider_name,
+            model=model_name
         )
 
         # Log EXECUTION_STARTED event
@@ -64,8 +123,13 @@ class ExecutionService:
             prompt = task.problem_statement
             system_instruction = f"You are {agent.name}, an AI assistant. Capabilities: {', '.join(agent.capabilities)}"
             
-            # Execute generation via provider boundary
-            output, mode = self.provider.generate(prompt, system_instruction=system_instruction)
+            # Execute generation via provider boundary, passing API key and execution model snapshot
+            output, mode = model_provider.generate(
+                prompt, 
+                system_instruction=system_instruction,
+                api_key=resolved_key,
+                model=execution.model
+            )
             
             # Save the execution mode flag (REAL or SIMULATED)
             execution.mode = mode

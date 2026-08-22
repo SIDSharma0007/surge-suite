@@ -64,6 +64,8 @@ class TaskExecution(models.Model):
         choices=[('REAL', 'Real'), ('SIMULATED', 'Simulated')],
         default='SIMULATED'
     )
+    provider = models.CharField(max_length=100, null=True, blank=True)
+    model = models.CharField(max_length=100, null=True, blank=True)
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     result = models.TextField(blank=True, null=True)
@@ -105,3 +107,17 @@ class ExecutionEvent(models.Model):
 
     def __str__(self):
         return f"Event {self.event_type} at {self.timestamp}"
+
+class UserProviderCredential(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='provider_credentials')
+    provider = models.CharField(max_length=100) # lowercase e.g., 'gemini', 'groq'
+    encrypted_api_key = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'provider')
+
+    def __str__(self):
+        return f"{self.user.username} - {self.provider}"

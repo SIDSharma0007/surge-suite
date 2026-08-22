@@ -96,7 +96,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         # Determine permission based on action
-        if self.action in ['retrieve']:
+        if self.action in ['retrieve', 'workspace_settings']:
             return [IsAuthenticatedOr401(), IsWorkspaceMember()]
         elif self.action in ['update', 'partial_update', 'destroy', 'archive', 'restore', 'list_members', 'add_member', 'remove_member']:
             return [IsAuthenticatedOr401(), IsWorkspaceOwner()]
@@ -208,3 +208,65 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         membership = get_object_or_404(WorkspaceMembership, workspace=workspace, user_id=user_id)
         membership.delete()
         return Response({"success": True, "message": "Member removed successfully."}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='ai-providers', permission_classes=[IsAuthenticatedOr401])
+    def ai_providers(self, request):
+        registry = {
+            "simulated": {
+                "display_name": "Simulated",
+                "models": ["dev-mock"]
+            },
+            "gemini": {
+                "display_name": "Google AI Studio / Gemini",
+                "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+            },
+            "groq": {
+                "display_name": "Groq",
+                "models": ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768"]
+            },
+            "nvidia_nim": {
+                "display_name": "NVIDIA NIM",
+                "models": ["meta/llama-3.1-8b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"]
+            },
+            "openclaw": {
+                "display_name": "OpenClaw",
+                "models": ["gpt-3.5-turbo", "gpt-4"]
+            },
+            "opencode": {
+                "display_name": "OpenCode",
+                "models": ["gpt-3.5-turbo", "gpt-4"]
+            }
+        }
+        return Response(registry, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get', 'put', 'patch'], url_path='settings', url_name='settings', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])
+    def workspace_settings(self, request, pk=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+
+        if request.method == 'GET':
+            return Response({
+                "ai_provider": workspace.ai_provider,
+                "ai_model": workspace.ai_model
+            }, status=status.HTTP_200_OK)
+
+        ai_provider = request.data.get("ai_provider")
+        ai_model = request.data.get("ai_model")
+
+        SUPPORTED_PROVIDERS = ["simulated", "gemini", "groq", "nvidia_nim", "openclaw", "opencode"]
+        if ai_provider is not None:
+            if ai_provider not in SUPPORTED_PROVIDERS:
+                return Response(
+                    {"error": f"Unsupported provider: '{ai_provider}'"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            workspace.ai_provider = ai_provider
+
+        if ai_model is not None:
+            workspace.ai_model = ai_model
+
+        workspace.save()
+        return Response({
+            "ai_provider": workspace.ai_provider,
+            "ai_model": workspace.ai_model
+        }, status=status.HTTP_200_OK)

@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 
 from workspace.models import Workspace
+from workspace.permissions import IsAuthenticatedOr401
 from .models import Task, Agent, TaskExecution
 from .serializers import TaskSerializer, AgentSerializer, TaskExecutionSerializer
 from .permissions import IsWorkspaceMemberForTask
@@ -99,9 +100,107 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         # Execute synchronously using service layer
         execution_service = ExecutionService()
-        execution = execution_service.execute_task(task)
+        execution = execution_service.execute_task(task, user=request.user)
 
         # Refresh task from DB to pick up latest state
         task.refresh_from_db()
         serializer = self.get_serializer(task)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+from rest_framework.views import APIView
+from django.db import transaction
+from .models import UserProviderCredential
+from .utils.encryption import encrypt_value, decrypt_value
+
+SUPPORTED_PROVIDERS = {
+    "openclaw": "OpenClaw",
+    "opencode": "OpenCode",
+    "groq": "Groq",
+    "nvidia_nim": "NVIDIA NIM",
+    "gemini": "Google AI Studio",
+}
+
+class ProviderSettingsView(APIView):
+    permission_classes = [IsAuthenticatedOr401]
+
+    def get(self, request):
+        user = request.user
+        credentials = {
+            c.provider: decrypt_value(c.encrypted_api_key)
+            for c in UserProviderCredential.objects.filter(user=user)
+        }
+        
+        response_data = []
+        for p_id, p_name in SUPPORTED_PROVIDERS.items():
+            key = credentials.get(p_id)
+            configured = bool(key)
+            masked = "••••••••" + key[-4:] if (key and len(key) >= 4) else ("••••" if key else None)
+            response_data.append({
+                "provider": p_id,
+                "configured": configured,
+                "masked_key": masked
+            })
+        return Response(response_data, status=status.HTTP_200_OK)
+
+class ProviderSettingsDetailView(APIView):
+    permission_classes = [IsAuthenticatedOr401]
+
+    def post(self, request, provider):
+        return self._save_key(request, provider)
+
+    def put(self, request, provider):
+        return self._save_key(request, provider)
+
+    def _save_key(self, request, provider):
+        provider = provider.lower()
+        if provider not in SUPPORTED_PROVIDERS:
+            return Response(
+                {"error": f"Unsupported provider: '{provider}'"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        api_key = request.data.get("api_key")
+        if not api_key:
+            return Response(
+                {"error": "api_key field is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = request.user
+        encrypted = encrypt_value(api_key)
+        
+        # Save or update credential atomically
+        with transaction.atomic():
+            cred, created = UserProviderCredential.objects.get_or_create(
+                user=user,
+                provider=provider,
+                defaults={"encrypted_api_key": encrypted}
+            )
+            if not created:
+                cred.encrypted_api_key = encrypted
+                cred.save()
+                
+        # Return masked key
+        masked = "••••••••" + api_key[-4:] if len(api_key) >= 4 else "••••"
+        return Response({
+            "provider": provider,
+            "configured": True,
+            "masked_key": masked
+        }, status=status.HTTP_200_OK)
+
+    def delete(self, request, provider):
+        provider = provider.lower()
+        if provider not in SUPPORTED_PROVIDERS:
+            return Response(
+                {"error": f"Unsupported provider: '{provider}'"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = request.user
+        deleted_count, _ = UserProviderCredential.objects.filter(user=user, provider=provider).delete()
+        
+        return Response({
+            "provider": provider,
+            "configured": False,
+            "masked_key": None
+        }, status=status.HTTP_200_OK)

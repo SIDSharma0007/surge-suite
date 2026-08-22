@@ -197,9 +197,8 @@ class AgentAndTaskTestCase(TestCase):
         ])
 
     def test_execution_failure_path_logs_events(self):
-        # Set up a fake model provider that throws an exception to simulate failure
         class FailingModelProvider(FakeModelProvider):
-            def generate(self, prompt, system_instruction=None):
+            def generate(self, prompt, system_instruction=None, *args, **kwargs):
                 raise RuntimeError("API Timeout / Out of Quota")
 
         task = Task.objects.create(
@@ -224,3 +223,265 @@ class AgentAndTaskTestCase(TestCase):
         event_types = [e.event_type for e in events]
         self.assertIn('ACTION_COMPLETED', event_types) # action fails
         self.assertIn('EXECUTION_FAILED', event_types) # execution fails
+
+
+from unittest.mock import patch, MagicMock
+from .models import UserProviderCredential
+from .utils.encryption import encrypt_value, decrypt_value
+
+class ProviderCredentialsTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user_a = User.objects.create_user(username='user_a_cred', password='password_a')
+        self.user_b = User.objects.create_user(username='user_b_cred', password='password_b')
+        self.workspace_a = Workspace.objects.create(
+            name="User A's Workspace", 
+            owner=self.user_a,
+            ai_provider='gemini',
+            ai_model='gemini-2.5-flash'
+        )
+        
+        # Clear any agents created by migrations during setup
+        Agent.objects.all().delete()
+        
+        self.agent_gemini = Agent.objects.create(
+            name="Gemini Agent",
+            provider="gemini",
+            model="gemini-2.5-flash",
+            status="ACTIVE"
+        )
+        self.agent_groq = Agent.objects.create(
+            name="Groq Agent",
+            provider="groq",
+            model="llama3-8b-8192",
+            status="ACTIVE"
+        )
+
+    def test_credential_save_retrieve_delete_flow(self):
+        # 1. Unauthenticated save fails
+        response = self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "testkey123"})
+        self.assertEqual(response.status_code, 401)
+
+        # 2. Authenticated save succeeds
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "testkey123"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["configured"], True)
+        self.assertEqual(response.data["masked_key"], "••••••••y123")
+
+        # 3. GET status maps configured status and masks key
+        response = self.client.get('/api/v1/settings/providers/')
+        self.assertEqual(response.status_code, 200)
+        
+        gemini_status = next(p for p in response.data if p["provider"] == "gemini")
+        self.assertEqual(gemini_status["configured"], True)
+        self.assertEqual(gemini_status["masked_key"], "••••••••y123")
+        
+        groq_status = next(p for p in response.data if p["provider"] == "groq")
+        self.assertEqual(groq_status["configured"], False)
+        self.assertIsNone(groq_status["masked_key"])
+
+        # 4. Plaintext key is NOT returned
+        for item in response.data:
+            self.assertNotEqual(item.get("masked_key"), "testkey123")
+            self.assertNotIn("api_key", item)
+            self.assertNotIn("encrypted_api_key", item)
+
+        # 5. DB stores encrypted value
+        cred = UserProviderCredential.objects.get(user=self.user_a, provider="gemini")
+        self.assertNotEqual(cred.encrypted_api_key, "testkey123")
+        self.assertEqual(decrypt_value(cred.encrypted_api_key), "testkey123")
+
+        # 6. DELETE clears key
+        response = self.client.delete('/api/v1/settings/providers/gemini/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["configured"], False)
+        self.assertIsNone(response.data["masked_key"])
+        
+        self.assertFalse(UserProviderCredential.objects.filter(user=self.user_a, provider="gemini").exists())
+
+    def test_multi_user_isolation(self):
+        # User A saves KEY_A
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "KEY_A"})
+
+        # User B saves KEY_B
+        self.client.force_authenticate(user=self.user_b)
+        self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "KEY_B"})
+
+        # Assert User A cannot read User B's credential status
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.get('/api/v1/settings/providers/')
+        gemini_status = next(p for p in response.data if p["provider"] == "gemini")
+        self.assertEqual(gemini_status["masked_key"], "••••••••EY_A")
+
+        # Assert User A cannot modify User B's credential
+        self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "KEY_A_NEW"})
+        self.assertEqual(decrypt_value(UserProviderCredential.objects.get(user=self.user_a, provider="gemini").encrypted_api_key), "KEY_A_NEW")
+        self.assertEqual(decrypt_value(UserProviderCredential.objects.get(user=self.user_b, provider="gemini").encrypted_api_key), "KEY_B")
+
+        # Assert User A cannot delete User B's credential
+        self.client.delete('/api/v1/settings/providers/gemini/')
+        self.assertFalse(UserProviderCredential.objects.filter(user=self.user_a, provider="gemini").exists())
+        self.assertTrue(UserProviderCredential.objects.filter(user=self.user_b, provider="gemini").exists())
+
+    @patch('requests.post')
+    def test_provider_execution_key_resolution(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Gemini response"}]}}]
+        }
+        mock_post.return_value = mock_response
+
+        # User A saves GEMINI_KEY
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "GEMINI_KEY_A"})
+
+        task = Task.objects.create(
+            workspace=self.workspace_a,
+            creator=self.user_a,
+            problem_statement="Research AI Studio",
+            assigned_agent=self.agent_gemini,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user_a)
+
+        self.assertEqual(execution.status, 'COMPLETED')
+        self.assertEqual(execution.mode, 'REAL')
+        self.assertEqual(execution.result, "Gemini response")
+
+        # Assert correct header was sent to Google API
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        self.assertEqual(kwargs['headers']['x-goog-api-key'], 'GEMINI_KEY_A')
+        self.assertNotIn('key=', args[0])
+
+    def test_missing_credential_fails_execution(self):
+        task = Task.objects.create(
+            workspace=self.workspace_a,
+            creator=self.user_a,
+            problem_statement="Research AI Studio",
+            assigned_agent=self.agent_gemini,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user_a)
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, 'FAILED')
+        self.assertEqual(execution.status, 'FAILED')
+        self.assertEqual(execution.mode, 'REAL')
+        self.assertEqual(execution.error, "Configure this provider under Settings → AI Providers.")
+
+        self.assertNotEqual(execution.result, "[Simulated Response]")
+        self.assertNotIn("simulated", execution.error.lower())
+
+    @patch('requests.post')
+    def test_credential_leak_prevention(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "Groq response"}}]
+        }
+        mock_post.return_value = mock_response
+
+        # Save Groq Key
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post('/api/v1/settings/providers/groq/', {"api_key": "GROQ_SECRET_KEY_1234"})
+
+        # Configure workspace for Groq
+        self.workspace_a.ai_provider = 'groq'
+        self.workspace_a.ai_model = 'llama3-8b-8192'
+        self.workspace_a.save()
+
+        task = Task.objects.create(
+            workspace=self.workspace_a,
+            creator=self.user_a,
+            problem_statement="Research Groq API",
+            assigned_agent=self.agent_groq,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user_a)
+
+        self.assertEqual(execution.status, 'COMPLETED')
+        self.assertEqual(execution.mode, 'REAL')
+
+        actions = Action.objects.filter(execution=execution)
+        for act in actions:
+            self.assertNotIn("GROQ_SECRET_KEY_1234", str(act.input_data))
+            self.assertNotIn("GROQ_SECRET_KEY_1234", str(act.output_data))
+
+        events = ExecutionEvent.objects.filter(task=task)
+        for event in events:
+            self.assertNotIn("GROQ_SECRET_KEY_1234", str(event.metadata))
+
+        self.assertNotIn("GROQ_SECRET_KEY_1234", str(execution.result))
+        self.assertNotIn("GROQ_SECRET_KEY_1234", str(execution.error))
+        self.assertNotIn("GROQ_SECRET_KEY_1234", str(task.result))
+
+    @patch('requests.post')
+    def test_workspace_model_selection_propagation(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Gemini response"}]}}]
+        }
+        mock_post.return_value = mock_response
+
+        # Save Gemini API Key
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "GEMINI_KEY_A"})
+
+        # Configure workspace for Gemini 2.5 Pro
+        self.workspace_a.ai_provider = 'gemini'
+        self.workspace_a.ai_model = 'gemini-2.5-pro'
+        self.workspace_a.save()
+
+        task = Task.objects.create(
+            workspace=self.workspace_a,
+            creator=self.user_a,
+            problem_statement="Explain quantum computing",
+            assigned_agent=self.agent_gemini,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user_a)
+
+        self.assertEqual(execution.status, 'COMPLETED')
+        self.assertEqual(execution.mode, 'REAL')
+
+        # Assert correct URL was constructed with selected model name
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        self.assertIn('/models/gemini-2.5-pro:generateContent', args[0])
+
+    def test_workspace_provider_snapshot(self):
+        # Configure workspace for simulated
+        self.workspace_a.ai_provider = 'simulated'
+        self.workspace_a.ai_model = 'dev-mock'
+        self.workspace_a.save()
+
+        task = Task.objects.create(
+            workspace=self.workspace_a,
+            creator=self.user_a,
+            problem_statement="Test simulated snapshot",
+            assigned_agent=self.agent_gemini,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user_a)
+
+        self.assertEqual(execution.status, 'COMPLETED')
+        self.assertEqual(execution.mode, 'SIMULATED')
+        
+        # Verify immutable snapshots are saved on TaskExecution record
+        self.assertEqual(execution.provider, 'simulated')
+        self.assertEqual(execution.model, 'dev-mock')
