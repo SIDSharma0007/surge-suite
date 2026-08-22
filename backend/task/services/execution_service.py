@@ -2,6 +2,35 @@ from django.utils import timezone
 from task.models import Task, TaskExecution, Action, ExecutionEvent
 from .model_provider import RealGeminiModelProvider, FakeModelProvider
 import json
+import re
+
+def sanitize_data(data, sensitive_key=None):
+    """
+    Recursively redacts sensitive info (API keys, authorization headers, credentials)
+    from dictionary, list, or string structures before persisting to database.
+    """
+    if isinstance(data, dict):
+        sanitized = {}
+        for k, v in data.items():
+            k_lower = k.lower()
+            if any(term in k_lower for term in ['key', 'secret', 'password', 'token', 'authorization', 'credential', 'auth']):
+                sanitized[k] = "••••••••"
+            else:
+                sanitized[k] = sanitize_data(v, sensitive_key)
+        return sanitized
+    elif isinstance(data, list):
+        return [sanitize_data(item, sensitive_key) for item in data]
+    elif isinstance(data, str):
+        # Redact the resolved provider API key if present
+        if sensitive_key and sensitive_key in data:
+            data = data.replace(sensitive_key, "••••••••")
+        
+        # Redact Bearer tokens, API keys, x-goog-api-key values
+        data = re.sub(r'(?i)(bearer\s+)[a-zA-Z0-9_\-\.]+', r'\1••••••••', data)
+        data = re.sub(r'(?i)(x-goog-api-key\s*:\s*)[a-zA-Z0-9_\-\.]+', r'\1••••••••', data)
+        return data
+    else:
+        return data
 
 class ExecutionService:
     """
@@ -42,7 +71,29 @@ class ExecutionService:
             model_name = workspace.ai_model or 'dev-mock'
             
             from .model_provider import get_model_provider_by_name
-            model_provider, is_real = get_model_provider_by_name(provider_name)
+            try:
+                model_provider, is_real = get_model_provider_by_name(provider_name)
+            except ValueError as err:
+                task.status = 'FAILED'
+                task.save()
+                
+                execution = TaskExecution.objects.create(
+                    task=task,
+                    agent=agent,
+                    status='FAILED',
+                    mode='REAL',
+                    provider=provider_name,
+                    model=model_name,
+                    error=str(err)
+                )
+                
+                ExecutionEvent.objects.create(
+                    task=task,
+                    execution=execution,
+                    event_type='EXECUTION_FAILED',
+                    metadata=sanitize_data({'error': str(err)})
+                )
+                return execution
             
             # Resolve key for real providers
             if is_real:
@@ -75,7 +126,7 @@ class ExecutionService:
                         task=task,
                         execution=execution,
                         event_type='EXECUTION_FAILED',
-                        metadata={'error': f"Configure this provider under Settings → AI Providers."}
+                        metadata=sanitize_data({'error': f"Configure this provider under Settings → AI Providers."})
                     )
                     return execution
             else:
@@ -103,7 +154,7 @@ class ExecutionService:
             task=task,
             execution=execution,
             event_type='EXECUTION_STARTED',
-            metadata={'agent_id': str(agent.id), 'mode': execution.mode}
+            metadata=sanitize_data({'agent_id': str(agent.id), 'mode': execution.mode}, resolved_key)
         )
 
         # Log MCP_DISCOVERY_STARTED
@@ -111,19 +162,38 @@ class ExecutionService:
             task=task,
             execution=execution,
             event_type='MCP_DISCOVERY_STARTED',
-            metadata={'message': 'Discovering dynamic MCP tools...'}
+            metadata=sanitize_data({'message': 'Discovering dynamic MCP tools...'}, resolved_key)
         )
 
         mcp_registry = MCPRegistry()
-        mcp_registry.initialize_servers()
-        mcp_tools = mcp_registry.discover_tools()
+        try:
+            mcp_registry.initialize_servers()
+            mcp_tools = mcp_registry.discover_tools()
+        except Exception as e:
+            ExecutionEvent.objects.create(
+                task=task,
+                execution=execution,
+                event_type='EXECUTION_FAILED',
+                metadata=sanitize_data({'error': f"MCP Initialization failed: {str(e)}"}, resolved_key)
+            )
+            task.status = 'FAILED'
+            task.result = f"MCP Initialization failed: {str(e)}"
+            task.save()
+            
+            execution.status = 'FAILED'
+            execution.error = f"MCP Initialization failed: {str(e)}"
+            execution.completed_at = timezone.now()
+            execution.save()
+            
+            mcp_registry.shutdown()
+            return execution
 
         # Log MCP_DISCOVERY_COMPLETED
         ExecutionEvent.objects.create(
             task=task,
             execution=execution,
             event_type='MCP_DISCOVERY_COMPLETED',
-            metadata={'tools_discovered': [t['name'] for t in mcp_tools]}
+            metadata=sanitize_data({'tools_discovered': [t['name'] for t in mcp_tools]}, resolved_key)
         )
 
         builtin_registry = CapabilityRegistry()
@@ -195,7 +265,7 @@ class ExecutionService:
                     agent=agent,
                     action_type='generate_response',
                     status='RUNNING',
-                    input_data={'prompt': current_prompt[-500:]}
+                    input_data=sanitize_data({'prompt': current_prompt[-500:]}, resolved_key)
                 )
 
                 # Log ACTION_STARTED event
@@ -203,7 +273,7 @@ class ExecutionService:
                     task=task,
                     execution=execution,
                     event_type='ACTION_STARTED',
-                    metadata={'action_id': str(action.id), 'action_type': 'generate_response'}
+                    metadata=sanitize_data({'action_id': str(action.id), 'action_type': 'generate_response'}, resolved_key)
                 )
 
                 # Execute generation via provider boundary
@@ -218,28 +288,59 @@ class ExecutionService:
                 execution.mode = mode
                 execution.save()
 
-                # Parse tool call JSON if requested
+                # Parse tool call JSON strictly
                 tool_call = None
                 clean_output = output.strip()
                 
-                if "{" in clean_output and "}" in clean_output:
-                    try:
-                        import re
-                        json_match = re.search(r'\{.*\}', clean_output, re.DOTALL)
-                        if json_match:
-                            parsed = json.loads(json_match.group(0))
-                            if "tool_call" in parsed:
-                                tool_call = parsed["tool_call"]
-                    except Exception:
-                        pass
+                # Strip markdown code block fences if present
+                if clean_output.startswith("```"):
+                    lines = clean_output.splitlines()
+                    if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].startswith("```"):
+                        clean_output = "\n".join(lines[1:-1]).strip()
+
+                try:
+                    parsed = json.loads(clean_output)
+                    if isinstance(parsed, dict) and len(parsed) == 1 and "tool_call" in parsed:
+                        tc = parsed["tool_call"]
+                        if isinstance(tc, dict) and "name" in tc and "arguments" in tc and len(tc) == 2:
+                            if isinstance(tc["name"], str) and isinstance(tc["arguments"], dict):
+                                tool_call = tc
+                except Exception:
+                    pass
 
                 if tool_call:
                     tool_name = tool_call.get("name")
                     tool_args = tool_call.get("arguments", {})
 
+                    is_mcp = tool_name in mcp_registry.tools
+                    is_builtin = tool_name in builtin_registry.capabilities
+
+                    tool_result = None
+
+                    # Backend enforcement of MCP-first / fallback policy
+                    if not is_mcp and not is_builtin:
+                        tool_result = {"error": f"Tool '{tool_name}' is not registered."}
+                    elif tool_name == "bash.execute":
+                        # Block shell fallback if an equivalent MCP tool is available
+                        has_fs_mcp = any(t.endswith("list_directory") for t in mcp_registry.tools)
+                        cmd_lower = tool_args.get("command", "").strip().lower()
+                        if has_fs_mcp and any(x in cmd_lower for x in ["ls", "dir", "find"]):
+                            tool_result = {"error": "Security violation: Shell fallback rejected because a suitable MCP tool (filesystem.list_directory) is available."}
+                        else:
+                            # Block shell fallback if the last MCP tool run failed
+                            last_failed_mcp = False
+                            for turn in reversed(conversation_history):
+                                if "Tool Result" in turn and '"error"' in turn:
+                                    last_failed_mcp = True
+                                    break
+                                if "Model Request" in turn:
+                                    break
+                            if last_failed_mcp:
+                                tool_result = {"error": "Execution rejected: Cannot fall back to shell execution after an MCP tool failure."}
+
                     # Complete model request action
                     action.status = 'COMPLETED'
-                    action.output_data = {'tool_call': tool_call}
+                    action.output_data = sanitize_data({'tool_call': tool_call}, resolved_key)
                     action.completed_at = timezone.now()
                     action.save()
 
@@ -247,88 +348,89 @@ class ExecutionService:
                         task=task,
                         execution=execution,
                         event_type='ACTION_COMPLETED',
-                        metadata={'action_id': str(action.id), 'status': 'COMPLETED'}
+                        metadata=sanitize_data({'action_id': str(action.id), 'status': 'COMPLETED'}, resolved_key)
                     )
 
-                    # Determine tool types and log corresponding event
-                    is_mcp = tool_name in mcp_registry.tools
-                    is_builtin = tool_name in builtin_registry.capabilities
-
-                    if is_mcp:
-                        ExecutionEvent.objects.create(
-                            task=task,
-                            execution=execution,
-                            event_type='TOOL_SELECTED',
-                            metadata={'tool_name': tool_name, 'type': 'mcp'}
-                        )
-                    elif is_builtin:
-                        cap = builtin_registry.capabilities[tool_name]
-                        if cap.get("type") == "fallback":
+                    if tool_result is None:
+                        # Log corresponding selection event
+                        if is_mcp:
                             ExecutionEvent.objects.create(
                                 task=task,
                                 execution=execution,
-                                event_type='FALLBACK_SELECTED',
-                                metadata={'tool_name': tool_name}
+                                event_type='TOOL_SELECTED',
+                                metadata=sanitize_data({'tool_name': tool_name, 'type': 'mcp'}, resolved_key)
+                            )
+                        elif is_builtin:
+                            cap = builtin_registry.capabilities[tool_name]
+                            if cap.get("type") == "fallback":
+                                ExecutionEvent.objects.create(
+                                    task=task,
+                                    execution=execution,
+                                    event_type='FALLBACK_SELECTED',
+                                    metadata=sanitize_data({'tool_name': tool_name}, resolved_key)
+                                )
+                            else:
+                                ExecutionEvent.objects.create(
+                                    task=task,
+                                    execution=execution,
+                                    event_type='TOOL_SELECTED',
+                                    metadata=sanitize_data({'tool_name': tool_name, 'type': 'builtin'}, resolved_key)
+                                )
+
+                        # Create TOOL_STARTED event
+                        ExecutionEvent.objects.create(
+                            task=task,
+                            execution=execution,
+                            event_type='TOOL_STARTED',
+                            metadata=sanitize_data({'tool_name': tool_name, 'arguments': tool_args}, resolved_key)
+                        )
+
+                        # Create Action for tool call execution
+                        tool_action = Action.objects.create(
+                            execution=execution,
+                            agent=agent,
+                            action_type='execute_tool',
+                            status='RUNNING',
+                            input_data=sanitize_data({'tool_name': tool_name, 'arguments': tool_args}, resolved_key)
+                        )
+
+                        # Execute tool
+                        try:
+                            if is_mcp:
+                                tool_result = mcp_registry.execute_tool(tool_name, tool_args)
+                            elif is_builtin:
+                                tool_result = builtin_registry.execute_tool(tool_name, tool_args)
+                        except Exception as e:
+                            tool_result = {"error": str(e)}
+
+                        # Complete tool execution action
+                        tool_action.status = 'COMPLETED'
+                        tool_action.output_data = sanitize_data({'result': tool_result}, resolved_key)
+                        tool_action.completed_at = timezone.now()
+                        tool_action.save()
+
+                        # Create TOOL_COMPLETED or TOOL_FAILED event
+                        if "error" in tool_result:
+                            ExecutionEvent.objects.create(
+                                task=task,
+                                execution=execution,
+                                event_type='TOOL_FAILED',
+                                metadata=sanitize_data({'tool_name': tool_name, 'error': tool_result["error"]}, resolved_key)
                             )
                         else:
                             ExecutionEvent.objects.create(
                                 task=task,
                                 execution=execution,
-                                event_type='TOOL_SELECTED',
-                                metadata={'tool_name': tool_name, 'type': 'builtin'}
+                                event_type='TOOL_COMPLETED',
+                                metadata=sanitize_data({'tool_name': tool_name, 'status': 'COMPLETED', 'result_summary': str(tool_result)[:150]}, resolved_key)
                             )
-
-                    # Create TOOL_STARTED event
-                    ExecutionEvent.objects.create(
-                        task=task,
-                        execution=execution,
-                        event_type='TOOL_STARTED',
-                        metadata={'tool_name': tool_name, 'arguments': tool_args}
-                    )
-
-                    # Create Action for tool call execution
-                    tool_action = Action.objects.create(
-                        execution=execution,
-                        agent=agent,
-                        action_type='execute_tool',
-                        status='RUNNING',
-                        input_data={'tool_name': tool_name, 'arguments': tool_args}
-                    )
-
-                    # Execute tool
-                    if is_mcp:
-                        tool_result = mcp_registry.execute_tool(tool_name, tool_args)
-                    elif is_builtin:
-                        tool_result = builtin_registry.execute_tool(tool_name, tool_args)
                     else:
-                        tool_result = {"error": f"Tool '{tool_name}' not found."}
-
-                    # Sanitize tool results (remove any passwords, secrets)
-                    tool_result_str = str(tool_result)
-                    if resolved_key and resolved_key in tool_result_str:
-                        tool_result_str = tool_result_str.replace(resolved_key, "••••••••")
-                        tool_result = {"error": "Security violation: Key exposure prevented.", "data": tool_result_str}
-
-                    # Complete tool execution action
-                    tool_action.status = 'COMPLETED'
-                    tool_action.output_data = {'result': tool_result}
-                    tool_action.completed_at = timezone.now()
-                    tool_action.save()
-
-                    # Create TOOL_COMPLETED or TOOL_FAILED event
-                    if "error" in tool_result:
+                        # Log selected and failed immediately for blocked / invalid tools
                         ExecutionEvent.objects.create(
                             task=task,
                             execution=execution,
                             event_type='TOOL_FAILED',
-                            metadata={'tool_name': tool_name, 'error': tool_result["error"]}
-                        )
-                    else:
-                        ExecutionEvent.objects.create(
-                            task=task,
-                            execution=execution,
-                            event_type='TOOL_COMPLETED',
-                            metadata={'tool_name': tool_name, 'status': 'COMPLETED', 'result_summary': str(tool_result)[:150]}
+                            metadata=sanitize_data({'tool_name': tool_name, 'error': tool_result["error"]}, resolved_key)
                         )
 
                     # Append turn to conversation history
@@ -339,7 +441,7 @@ class ExecutionService:
                 else:
                     # Final answer received from model
                     action.status = 'COMPLETED'
-                    action.output_data = {'result': output}
+                    action.output_data = sanitize_data({'result': output}, resolved_key)
                     action.completed_at = timezone.now()
                     action.save()
 
@@ -347,7 +449,7 @@ class ExecutionService:
                         task=task,
                         execution=execution,
                         event_type='ACTION_COMPLETED',
-                        metadata={'action_id': str(action.id), 'status': 'COMPLETED'}
+                        metadata=sanitize_data({'action_id': str(action.id), 'status': 'COMPLETED'}, resolved_key)
                     )
 
                     final_result = output
@@ -358,13 +460,13 @@ class ExecutionService:
 
             # Complete TaskExecution
             execution.status = 'COMPLETED'
-            execution.result = final_result
+            execution.result = sanitize_data(final_result, resolved_key)
             execution.completed_at = timezone.now()
             execution.save()
 
             # Update base Task state
             task.status = 'COMPLETED'
-            task.result = final_result
+            task.result = sanitize_data(final_result, resolved_key)
             task.save()
 
             # Log execution completed events
@@ -372,19 +474,19 @@ class ExecutionService:
                 task=task,
                 execution=execution,
                 event_type='FINAL_RESPONSE_GENERATED',
-                metadata={'result_length': len(final_result)}
+                metadata=sanitize_data({'result_length': len(final_result)}, resolved_key)
             )
             ExecutionEvent.objects.create(
                 task=task,
                 execution=execution,
                 event_type='EXECUTION_COMPLETED',
-                metadata={'status': 'SUCCESS'}
+                metadata=sanitize_data({'status': 'SUCCESS'}, resolved_key)
             )
 
         except Exception as e:
             # Mark Action as FAILED
             action.status = 'FAILED'
-            action.output_data = {'error': str(e)}
+            action.output_data = sanitize_data({'error': str(e)}, resolved_key)
             action.completed_at = timezone.now()
             action.save()
 
@@ -393,18 +495,18 @@ class ExecutionService:
                 task=task,
                 execution=execution,
                 event_type='ACTION_COMPLETED',
-                metadata={'action_id': str(action.id), 'status': 'FAILED', 'error': str(e)}
+                metadata=sanitize_data({'action_id': str(action.id), 'status': 'FAILED', 'error': str(e)}, resolved_key)
             )
 
             # Update TaskExecution to FAILED
             execution.status = 'FAILED'
-            execution.error = str(e)
+            execution.error = sanitize_data(str(e), resolved_key)
             execution.completed_at = timezone.now()
             execution.save()
 
             # Update base Task state
             task.status = 'FAILED'
-            task.result = f"Error during execution: {str(e)}"
+            task.result = sanitize_data(f"Error during execution: {str(e)}", resolved_key)
             task.save()
 
             # Log EXECUTION_FAILED event
@@ -412,7 +514,7 @@ class ExecutionService:
                 task=task,
                 execution=execution,
                 event_type='EXECUTION_FAILED',
-                metadata={'error': str(e)}
+                metadata=sanitize_data({'error': str(e)}, resolved_key)
             )
 
         finally:

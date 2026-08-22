@@ -101,25 +101,43 @@ class CapabilityRegistry:
             return {"error": str(e)}
 
     def handle_bash_execute(self, args: dict) -> dict:
-        command = args.get("command", "").strip()
-        command_lower = command.lower()
+        # Strict security validation
+        command_clean = args.get("command", "").strip()
+        command_lower = command_clean.lower()
         
-        # Block command injection and destructive utilities
-        blocked_commands = [
-            "rm", "sudo", "shutdown", "reboot", "mkfs", "dd", "curl", "wget",
-            "chmod", "chown", "kill", "pkill", "systemctl", "init"
-        ]
-        for b in blocked_commands:
-            if re.search(r'\b' + b + r'\b', command_lower):
-                raise PermissionDenied(f"Access denied: Command '{b}' is blocked for security.")
-
-        # Prevent environment dumping and credential access
+        # Block subshell, backticks, redirection, and nested commands
+        forbidden_chars = ["$", "(", ")", "`", "'", "\"", "\n", ">", "<"]
+        for fc in forbidden_chars:
+            if fc in command_clean:
+                raise PermissionDenied(f"Access denied: Nested commands, redirection, or quotes '{fc}' are blocked for security.")
+                
+        # Split command by standard separators: | , & , ;
+        subparts = []
+        for part in re.split(r'[|&;]', command_clean):
+            part = part.strip()
+            if part:
+                subparts.append(part)
+                
+        ALLOWED_EXECUTABLES = {"echo", "ls", "git", "npm"}
+        
+        for part in subparts:
+            tokens = part.split()
+            if not tokens:
+                continue
+            exec_name = tokens[0].lower()
+            if exec_name not in ALLOWED_EXECUTABLES:
+                raise PermissionDenied(f"Access denied: Command '{exec_name}' is not in the safe allowlist.")
+                
+        # Blocked terms scanning (case-insensitive) for any secrets, SSH files, env, credentials
         blocked_terms = [
-            "env", "printenv", "set", ".env", "secret_key", "api_key", "password",
-            "token", "credential", "private_key", "symmetric"
+            ".env", "settings.py", "secret", "key", "token", "credential", 
+            "password", "shadow", "passwd", "ssh", "rsa", "fernet", "cryptography",
+            "cat", "head", "tail", "less", "more", "grep", "find", "awk", "sed",
+            "curl", "wget", "nc", "netcat", "telnet", "scp", "ftp", "sftp", "nmap",
+            "python", "node", "perl", "ruby", "bash", "sh", "zsh"
         ]
         for term in blocked_terms:
-            if re.search(r'\b' + term + r'\b', command_lower) or term in command_lower:
+            if term in command_lower:
                 raise PermissionDenied(f"Access denied: Accessing or dumping '{term}' is blocked for security.")
 
         # Environmental security: strip secrets before executing
@@ -137,7 +155,7 @@ class CapabilityRegistry:
         try:
             # Run command with 15 second timeout and restricted environment
             result = subprocess.run(
-                command,
+                command_clean,
                 shell=True,
                 cwd=base_dir,
                 env=clean_env,
