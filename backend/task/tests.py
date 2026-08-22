@@ -591,7 +591,7 @@ class ProviderCredentialsTestCase(TestCase):
         registry = CapabilityRegistry()
 
         # Safe command works
-        res = registry.execute_tool("bash.execute", {"command": "echo 'hello'"})
+        res = registry.execute_tool("bash.execute", {"command": "echo hello"})
         self.assertEqual(res.get("exit_code"), 0)
         self.assertIn("hello", res.get("stdout"))
 
@@ -729,3 +729,104 @@ class MCPLayerTestCase(TestCase):
             execution = exec_service.execute_task(task, user=user)
             self.assertEqual(execution.status, 'COMPLETED')
             self.assertEqual(execution.result, "Simple multiplication result is 112")
+
+
+class MCPLoopHardeningTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='hardening_user', password='password')
+        self.workspace = Workspace.objects.create(name="Hardening Workspace", owner=self.user, ai_provider='gemini', ai_model='gemini-2.5-flash')
+        self.agent = Agent.objects.create(name="Hardening Agent", provider="gemini", model="gemini-2.5-flash")
+
+    def test_bash_execute_harden_blocks(self):
+        from task.services.capability_registry import CapabilityRegistry
+        registry = CapabilityRegistry()
+
+        # Blocks reading secrets file
+        res = registry.execute_tool("bash.execute", {"command": "cat .env"})
+        self.assertIn("error", res)
+        self.assertIn("Access denied", res["error"])
+
+        # Blocks grep secrets
+        res = registry.execute_tool("bash.execute", {"command": "grep -i key .env"})
+        self.assertIn("error", res)
+        self.assertIn("Access denied", res["error"])
+
+        # Blocks python/node execution
+        res = registry.execute_tool("bash.execute", {"command": "python -c 'print(1)'"})
+        self.assertIn("error", res)
+        self.assertIn("Access denied", res["error"])
+
+        # Blocks curl/wget
+        res = registry.execute_tool("bash.execute", {"command": "curl http://example.com"})
+        self.assertIn("error", res)
+        self.assertIn("Access denied", res["error"])
+
+        # Blocks nested redirection or quotes
+        res = registry.execute_tool("bash.execute", {"command": "echo hello > test.txt"})
+        self.assertIn("error", res)
+        self.assertIn("Access denied", res["error"])
+
+        # Blocks environment dump
+        res = registry.execute_tool("bash.execute", {"command": "printenv"})
+        self.assertIn("error", res)
+        self.assertIn("Access denied", res["error"])
+
+        # Safe commands pass validation
+        res = registry.execute_tool("bash.execute", {"command": "git status"})
+        self.assertNotIn("error", res)
+        self.assertIn("exit_code", res)
+
+    def test_real_provider_credential_failure(self):
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Test credential check.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        # Without credentials, execute_task must fail immediately with FAILED and mode REAL
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user)
+        self.assertIsNotNone(execution)
+        self.assertEqual(execution.status, 'FAILED')
+        self.assertEqual(execution.mode, 'REAL')
+        self.assertEqual(task.status, 'FAILED')
+
+    def test_unknown_provider_raises_error(self):
+        # Configure unknown provider on workspace
+        workspace_unknown = Workspace.objects.create(name="Unknown Workspace", owner=self.user, ai_provider='super-gpt-99', ai_model='gpt-99')
+        task = Task.objects.create(
+            workspace=workspace_unknown,
+            creator=self.user,
+            problem_statement="Test unknown provider.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user)
+        self.assertEqual(execution.status, 'FAILED')
+        self.assertEqual(task.status, 'FAILED')
+        self.assertIn("Unsupported AI Provider", execution.error)
+
+    def test_centralized_sanitization(self):
+        from task.services.execution_service import sanitize_data
+        
+        # Test key redaction in dicts
+        sensitive_dict = {
+            "api_key": "supersecretkey123",
+            "password": "my-password",
+            "Authorization": "Bearer abc123def456",
+            "safe_field": "hello world"
+        }
+        sanitized = sanitize_data(sensitive_dict, "resolvedkey123")
+        self.assertEqual(sanitized["api_key"], "••••••••")
+        self.assertEqual(sanitized["password"], "••••••••")
+        self.assertEqual(sanitized["Authorization"], "••••••••")
+        self.assertEqual(sanitized["safe_field"], "hello world")
+
+        # Test key replacement inside strings
+        sensitive_string = "My credentials are x-goog-api-key: mygoogkey123 and key resolvedkey123"
+        sanitized_str = sanitize_data(sensitive_string, "resolvedkey123")
+        self.assertNotIn("resolvedkey123", sanitized_str)
+        self.assertIn("••••••••", sanitized_str)
+
