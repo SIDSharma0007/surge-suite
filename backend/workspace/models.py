@@ -7,6 +7,8 @@ class Workspace(models.Model):
     name = models.CharField(max_length=255)
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_workspaces')
     is_archived = models.BooleanField(default=False)
+    ai_provider = models.CharField(max_length=100, default='simulated')
+    ai_model = models.CharField(max_length=100, default='dev-mock')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     archived_at = models.DateTimeField(null=True, blank=True)

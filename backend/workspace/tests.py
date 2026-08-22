@@ -278,3 +278,92 @@ class WorkspaceTestCase(TestCase):
         self.assertFalse(Workspace.objects.filter(id=ws_old.id).exists())
         self.assertTrue(Workspace.objects.filter(id=ws_new.id).exists())
         self.assertTrue(Workspace.objects.filter(id=self.workspace_a1.id).exists())
+
+    # --- AI WORKSPACE CONFIGURATION & REGISTRY ---
+    def test_get_ai_providers_registry(self):
+        # Unauthenticated request fails
+        response = self.client.get(reverse('workspace-ai-providers'))
+        self.assertEqual(response.status_code, 401)
+
+        # Authenticated request succeeds and returns providers registry structure
+        self.client.force_login(self.user_a)
+        response = self.client.get(reverse('workspace-ai-providers'))
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn("simulated", data)
+        self.assertIn("gemini", data)
+        self.assertEqual(data["gemini"]["display_name"], "Google AI Studio / Gemini")
+        self.assertIn("gemini-2.5-flash", data["gemini"]["models"])
+
+    def test_get_workspace_settings(self):
+        # 1. Unauthenticated gets 401
+        response = self.client.get(reverse('workspace-settings', kwargs={'pk': self.workspace_a1.id}))
+        self.assertEqual(response.status_code, 401)
+
+        # 2. Unrelated user gets 403
+        self.client.force_login(self.user_b)
+        response = self.client.get(reverse('workspace-settings', kwargs={'pk': self.workspace_a1.id}))
+        self.assertEqual(response.status_code, 403)
+
+        # 3. Owner gets 200 and defaults
+        self.client.force_login(self.user_a)
+        response = self.client.get(reverse('workspace-settings', kwargs={'pk': self.workspace_a1.id}))
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data["ai_provider"], "simulated")
+        self.assertEqual(data["ai_model"], "dev-mock")
+
+    def test_update_workspace_settings_validation(self):
+        self.client.force_login(self.user_a)
+        
+        # 1. Update with valid parameters
+        response = self.client.patch(
+            reverse('workspace-settings', kwargs={'pk': self.workspace_a1.id}),
+            {'ai_provider': 'gemini', 'ai_model': 'gemini-2.5-pro'},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data["ai_provider"], "gemini")
+        self.assertEqual(data["ai_model"], "gemini-2.5-pro")
+
+        # Refresh model
+        self.workspace_a1.refresh_from_db()
+        self.assertEqual(self.workspace_a1.ai_provider, "gemini")
+        self.assertEqual(self.workspace_a1.ai_model, "gemini-2.5-pro")
+
+        # 2. Update with invalid provider fails validation
+        response = self.client.patch(
+            reverse('workspace-settings', kwargs={'pk': self.workspace_a1.id}),
+            {'ai_provider': 'unsupported_provider'},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_workspace_settings_isolation(self):
+        # Create second workspace for user_a
+        workspace_a2 = Workspace.objects.create(name="Workspace A2", owner=self.user_a)
+        
+        self.client.force_login(self.user_a)
+        
+        # Configure Workspace A1 as Gemini
+        self.client.patch(
+            reverse('workspace-settings', kwargs={'pk': self.workspace_a1.id}),
+            {'ai_provider': 'gemini', 'ai_model': 'gemini-2.5-pro'},
+            content_type='application/json'
+        )
+
+        # Configure Workspace A2 as Groq
+        self.client.patch(
+            reverse('workspace-settings', kwargs={'pk': workspace_a2.id}),
+            {'ai_provider': 'groq', 'ai_model': 'llama-3.3-70b-versatile'},
+            content_type='application/json'
+        )
+
+        # Assert Workspace A1 configuration is unaffected by A2 changes
+        self.workspace_a1.refresh_from_db()
+        workspace_a2.refresh_from_db()
+        self.assertEqual(self.workspace_a1.ai_provider, "gemini")
+        self.assertEqual(self.workspace_a1.ai_model, "gemini-2.5-pro")
+        self.assertEqual(workspace_a2.ai_provider, "groq")
+        self.assertEqual(workspace_a2.ai_model, "llama-3.3-70b-versatile")

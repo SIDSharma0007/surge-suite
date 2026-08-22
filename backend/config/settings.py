@@ -23,6 +23,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = config("SECRET_KEY")
 
+import sys
+TESTING = len(sys.argv) > 1 and sys.argv[1] == 'test'
+PROVIDER_CREDENTIAL_ENCRYPTION_KEY = config("PROVIDER_CREDENTIAL_ENCRYPTION_KEY", default=None)
+if not PROVIDER_CREDENTIAL_ENCRYPTION_KEY and TESTING:
+    PROVIDER_CREDENTIAL_ENCRYPTION_KEY = "VKbEp7xoahybtJudnEGmU0nO3wV3lbGHV18Z9PfoNKU="
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG", default=True, cast=bool)
 
@@ -43,6 +49,7 @@ INSTALLED_APPS = [
     "users",
     "authentication",
     "workspace",
+    "task",
     "notes",
     "todo",
     "rag",

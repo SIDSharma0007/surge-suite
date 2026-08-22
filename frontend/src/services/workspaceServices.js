@@ -79,5 +79,26 @@ export const workspaceServices = {
    */
   removeMember(id, userId) {
     return api.delete(`/workspaces/${id}/members/${userId}/`);
+  },
+
+  /**
+   * Retrieve centralized list of backend AI providers and their models.
+   */
+  listAIProviders() {
+    return api.get('/workspaces/ai-providers/');
+  },
+
+  /**
+   * Retrieve specific workspace settings.
+   */
+  getSettings(id) {
+    return api.get(`/workspaces/${id}/settings/`);
+  },
+
+  /**
+   * Update specific workspace settings.
+   */
+  updateSettings(id, data) {
+    return api.patch(`/workspaces/${id}/settings/`, data);
   }
 };
