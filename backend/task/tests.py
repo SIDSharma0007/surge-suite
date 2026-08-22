@@ -191,8 +191,10 @@ class AgentAndTaskTestCase(TestCase):
             'TASK_CREATED',
             'AGENT_SELECTED',
             'EXECUTION_STARTED',
+            'TOOL_DISCOVERED',
             'ACTION_STARTED',
             'ACTION_COMPLETED',
+            'FINAL_RESPONSE_GENERATED',
             'EXECUTION_COMPLETED'
         ])
 
@@ -485,3 +487,106 @@ class ProviderCredentialsTestCase(TestCase):
         # Verify immutable snapshots are saved on TaskExecution record
         self.assertEqual(execution.provider, 'simulated')
         self.assertEqual(execution.model, 'dev-mock')
+
+    @patch('requests.post')
+    def test_direct_answer(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "The answer is 112"}]}}]
+        }
+        mock_post.return_value = mock_response
+
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "GEMINI_KEY"})
+
+        task = Task.objects.create(
+            workspace=self.workspace_a,
+            creator=self.user_a,
+            problem_statement="What is 56 * 2?",
+            assigned_agent=self.agent_gemini,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user_a)
+
+        self.assertEqual(execution.status, 'COMPLETED')
+        self.assertEqual(execution.result, "The answer is 112")
+        
+        # Verify no tool events were logged
+        events = ExecutionEvent.objects.filter(task=task)
+        event_types = [e.event_type for e in events]
+        self.assertNotIn('TOOL_STARTED', event_types)
+
+    @patch('requests.post')
+    def test_tool_usage_mcp(self, mock_post):
+        # We need two responses: first requests tool call, second returns final summary
+        mock_resp_1 = MagicMock()
+        mock_resp_1.status_code = 200
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "."}}}'}]}}]
+        }
+
+        mock_resp_2 = MagicMock()
+        mock_resp_2.status_code = 200
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "I found these files: manage.py"}]}}]
+        }
+
+        mock_post.side_effect = [mock_resp_1, mock_resp_2]
+
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "GEMINI_KEY"})
+
+        task = Task.objects.create(
+            workspace=self.workspace_a,
+            creator=self.user_a,
+            problem_statement="List Python files",
+            assigned_agent=self.agent_gemini,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        execution = exec_service.execute_task(task, user=self.user_a)
+
+        self.assertEqual(execution.status, 'COMPLETED')
+        self.assertEqual(execution.result, "I found these files: manage.py")
+
+        # Verify tool started and completed events exist
+        events = ExecutionEvent.objects.filter(task=task)
+        event_types = [e.event_type for e in events]
+        self.assertIn('TOOL_STARTED', event_types)
+        self.assertIn('TOOL_COMPLETED', event_types)
+
+    def test_bash_fallback_security(self):
+        from task.services.capability_registry import CapabilityRegistry
+        registry = CapabilityRegistry()
+
+        # Safe command works
+        res = registry.execute_tool("bash.execute", {"command": "echo 'hello'"})
+        self.assertEqual(res.get("exit_code"), 0)
+        self.assertIn("hello", res.get("stdout"))
+
+        # Destructive command is blocked
+        res_blocked = registry.execute_tool("bash.execute", {"command": "sudo rm -rf /"})
+        self.assertIn("error", res_blocked)
+
+        # File deletion blocked
+        res_del = registry.execute_tool("bash.execute", {"command": "rm -f file.txt"})
+        self.assertIn("error", res_del)
+
+    def test_database_security(self):
+        from task.services.capability_registry import CapabilityRegistry
+        registry = CapabilityRegistry()
+
+        # Destructive query is blocked
+        res_drop = registry.execute_tool("database.query", {"sql": "DROP TABLE workspace_workspace"})
+        self.assertIn("error", res_drop)
+
+        res_update = registry.execute_tool("database.query", {"sql": "UPDATE workspace_workspace SET name='Hacked'"})
+        self.assertIn("error", res_update)
+
+        # Non-select is blocked
+        res_insert = registry.execute_tool("database.query", {"sql": "INSERT INTO workspace_workspace (name) VALUES ('Hacked')"})
+        self.assertIn("error", res_insert)

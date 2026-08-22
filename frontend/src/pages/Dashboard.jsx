@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
 import Notes from './Notes.jsx';
 import SettingsTab from '../components/SettingsTab';
+import MarkdownRenderer from '../components/MarkdownRenderer';
 import { workspaceServices } from '../services/workspaceServices';
 import { taskServices } from '../services/taskServices';
 import { 
@@ -54,6 +55,7 @@ export default function Dashboard() {
   // Task & Agent execution state variables
   const [tasks, setTasks] = useState([]);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
+  const [showRawLogs, setShowRawLogs] = useState(false);
   const [taskProblemStatement, setTaskProblemStatement] = useState('');
   const [tasksLoading, setTasksLoading] = useState(false);
   const [executingTaskId, setExecutingTaskId] = useState(null);
@@ -965,40 +967,144 @@ export default function Dashboard() {
                                 {/* Final Output Result */}
                                 {selectedTask.result && (
                                   <div style={styles.resultBoxRedesign}>
-                                    <h4 style={styles.resultHeader}>Execution Result Output</h4>
-                                    <div style={styles.resultContentRedesign}>
-                                      {selectedTask.result}
+                                    <h4 style={styles.resultHeader}>Result</h4>
+                                    <div style={{ padding: '16px' }}>
+                                      <MarkdownRenderer text={selectedTask.result} />
                                     </div>
                                   </div>
                                 )}
 
-                                {/* Events Timeline */}
+                                {/* Tools Used */}
+                                {(() => {
+                                  const executedTools = [];
+                                  selectedTask.events?.forEach(event => {
+                                    if (event.event_type === 'TOOL_COMPLETED' && event.metadata?.tool_name) {
+                                      if (!executedTools.includes(event.metadata.tool_name)) {
+                                        executedTools.push(event.metadata.tool_name);
+                                      }
+                                    }
+                                  });
+                                  if (executedTools.length === 0) return null;
+                                  return (
+                                    <div style={{ marginTop: '24px' }}>
+                                      <h4 style={styles.timelineHeader}>Tools Used</h4>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: 'var(--bg-hover)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
+                                        {executedTools.map(tool => (
+                                          <div key={tool} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--status-success, #22c55e)' }}>
+                                            <span>✓</span>
+                                            <strong style={{ color: 'var(--text-primary)' }}>{tool}</strong>
+                                          </div>
+                                        ))}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--status-success, #22c55e)' }}>
+                                          <span>✓</span>
+                                          <span style={{ color: 'var(--text-secondary)' }}>Final response generated</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* Human-readable Timeline */}
                                 <div style={{ marginTop: '24px' }}>
-                                  <h4 style={styles.timelineHeader}>Execution Timeline Logs</h4>
+                                  <h4 style={styles.timelineHeader}>Execution Timeline</h4>
                                   <div style={styles.timelineListRedesign}>
                                     {selectedTask.events && selectedTask.events.length > 0 ? (
-                                      selectedTask.events.map((event, idx) => (
-                                        <div key={event.id} style={styles.timelineItemRedesign}>
-                                          <div style={styles.timelineDot} />
-                                          <div style={styles.timelineContentBox}>
-                                            <div style={styles.timelineItemHeaderRedesign}>
-                                              <span style={styles.timelineType}>{event.event_type}</span>
-                                              <span style={styles.timelineTime}>
-                                                {new Date(event.timestamp).toLocaleTimeString()}
-                                              </span>
+                                      (() => {
+                                        const getReadableEventTitle = (event) => {
+                                          const titles = {
+                                            TASK_CREATED: "Task created",
+                                            AGENT_SELECTED: "Agent selected",
+                                            EXECUTION_STARTED: "Execution started",
+                                            TOOL_DISCOVERED: "Capabilities discovered",
+                                            TOOL_STARTED: "Tool execution started",
+                                            TOOL_COMPLETED: "Tool execution completed",
+                                            FINAL_RESPONSE_GENERATED: "Final response generated",
+                                            EXECUTION_COMPLETED: "Execution completed",
+                                            EXECUTION_FAILED: "Execution failed",
+                                            ACTION_STARTED: "Model query started",
+                                            ACTION_COMPLETED: "Model query completed"
+                                          };
+                                          
+                                          let base = titles[event.event_type] || event.event_type;
+                                          if (event.event_type === 'AGENT_SELECTED' && event.metadata?.agent_name) {
+                                            base = `${event.metadata.agent_name} selected`;
+                                          } else if (event.event_type === 'TOOL_STARTED' && event.metadata?.tool_name) {
+                                            base = `Tool execution started: ${event.metadata.tool_name}`;
+                                          } else if (event.event_type === 'TOOL_COMPLETED' && event.metadata?.tool_name) {
+                                            base = `Tool completed: ${event.metadata.tool_name}`;
+                                          } else if (event.event_type === 'EXECUTION_FAILED' && event.metadata?.error) {
+                                            base = `Execution failed: ${event.metadata.error}`;
+                                          }
+                                          return base;
+                                        };
+
+                                        return selectedTask.events.map((event, idx) => {
+                                          const isError = event.event_type === 'EXECUTION_FAILED' || (event.event_type === 'ACTION_COMPLETED' && event.metadata?.status === 'FAILED');
+                                          return (
+                                            <div key={event.id} style={styles.timelineItemRedesign}>
+                                              <div style={{
+                                                ...styles.timelineDot,
+                                                backgroundColor: isError ? 'var(--status-error, #ef4444)' : 'var(--status-success, #22c55e)'
+                                              }} />
+                                              <div style={styles.timelineContentBox}>
+                                                <div style={styles.timelineItemHeaderRedesign}>
+                                                  <span style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text-primary)' }}>
+                                                    {isError ? '✗' : '✓'} {getReadableEventTitle(event)}
+                                                  </span>
+                                                  <span style={styles.timelineTime}>
+                                                    {new Date(event.timestamp).toLocaleTimeString()}
+                                                  </span>
+                                                </div>
+                                              </div>
                                             </div>
-                                            {event.metadata && Object.keys(event.metadata).length > 0 && (
-                                              <pre style={styles.timelineMeta}>
-                                                {JSON.stringify(event.metadata, null, 2)}
-                                              </pre>
-                                            )}
-                                          </div>
-                                        </div>
-                                      ))
+                                          );
+                                        });
+                                      })()
                                     ) : (
                                       <p style={styles.taskEmptyText}>No timeline events logged.</p>
                                     )}
                                   </div>
+                                </div>
+
+                                {/* Developer / Debug Section */}
+                                <div style={{ marginTop: '24px', borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
+                                  <button
+                                    onClick={() => setShowRawLogs(!showRawLogs)}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: 'var(--text-secondary)',
+                                      cursor: 'pointer',
+                                      fontSize: '12px',
+                                      fontWeight: '600',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      padding: 0
+                                    }}
+                                  >
+                                    {showRawLogs ? '▼ Hide Developer Details' : '▶ Show Developer Details'}
+                                  </button>
+                                  {showRawLogs && (
+                                    <div style={{ marginTop: '12px' }}>
+                                      <h5 style={{ ...styles.timelineHeader, margin: '0 0 8px 0' }}>Raw Debug Logs</h5>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                        {selectedTask.events?.map(event => (
+                                          <div key={event.id} style={{ padding: '10px', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-medium)', fontFamily: 'monospace', fontSize: '11px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                              <span style={{ fontWeight: '600', color: 'var(--status-error)' }}>{event.event_type}</span>
+                                              <span style={{ color: 'var(--text-muted)' }}>{new Date(event.timestamp).toLocaleTimeString()}</span>
+                                            </div>
+                                            {event.metadata && (
+                                              <pre style={{ margin: 0, overflowX: 'auto', color: 'var(--text-secondary)' }}>
+                                                {JSON.stringify(event.metadata, null, 2)}
+                                              </pre>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             );
