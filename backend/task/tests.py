@@ -1,4 +1,5 @@
 from django.test import TestCase
+import json
 from django.contrib.auth.models import User
 from django.urls import reverse
 from django.utils import timezone
@@ -522,7 +523,7 @@ class ProviderCredentialsTestCase(TestCase):
 
     @patch('requests.post')
     def test_tool_usage_mcp(self, mock_post):
-        # We need two responses: first requests tool call, second returns final summary
+        # We need three responses: first requests tool call, second returns prelim answer, third returns final synthesis
         mock_resp_1 = MagicMock()
         mock_resp_1.status_code = 200
         mock_resp_1.json.return_value = {
@@ -535,7 +536,13 @@ class ProviderCredentialsTestCase(TestCase):
             "candidates": [{"content": {"parts": [{"text": "I found these files: manage.py"}]}}]
         }
 
-        mock_post.side_effect = [mock_resp_1, mock_resp_2]
+        mock_resp_3 = MagicMock()
+        mock_resp_3.status_code = 200
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "I used the filesystem MCP tool to inspect the workspace. No fallback shell command was required."}]}}]
+        }
+
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
 
         self.client.force_authenticate(user=self.user_a)
         self.client.post('/api/v1/settings/providers/gemini/', {"api_key": "GEMINI_KEY"})
@@ -575,7 +582,7 @@ class ProviderCredentialsTestCase(TestCase):
             execution = exec_service.execute_task(task, user=self.user_a)
 
             self.assertEqual(execution.status, 'COMPLETED')
-            self.assertEqual(execution.result, "I found these files: manage.py")
+            self.assertEqual(execution.result, "I used the filesystem MCP tool to inspect the workspace. No fallback shell command was required.")
 
             # Verify events logged
             events = ExecutionEvent.objects.filter(task=task)
@@ -829,4 +836,347 @@ class MCPLoopHardeningTestCase(TestCase):
         sanitized_str = sanitize_data(sensitive_string, "resolvedkey123")
         self.assertNotIn("resolvedkey123", sanitized_str)
         self.assertIn("••••••••", sanitized_str)
+
+
+class TaskSynthesisTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='synth_user', password='password')
+        from task.models import UserProviderCredential
+        from task.utils.encryption import encrypt_value
+        UserProviderCredential.objects.create(
+            user=self.user,
+            provider='gemini',
+            encrypted_api_key=encrypt_value('fake-key')
+        )
+        self.workspace = Workspace.objects.create(
+            name="Synth Workspace",
+            owner=self.user,
+            ai_provider='gemini',
+            ai_model='gemini-2.5-flash'
+        )
+        self.agent = Agent.objects.create(
+            name="Synth Agent",
+            provider="gemini",
+            model="gemini-2.5-flash",
+            status="ACTIVE"
+        )
+
+    @patch('requests.post')
+    def test_direct_no_tool_task_makes_exactly_one_call(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "56 * 2 = 112"}]}}]
+        }
+        mock_post.return_value = mock_response
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="What is 56 * 2?",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = []
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+
+            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(execution.result, "56 * 2 = 112")
+            # Verify exactly one API call was made to the model provider
+            self.assertEqual(mock_post.call_count, 1)
+
+    @patch('requests.post')
+    def test_tool_task_triggers_synthesis_call(self, mock_post):
+        # 1st call: request tool
+        mock_resp_1 = MagicMock()
+        mock_resp_1.status_code = 200
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "."}}}'}]}}]
+        }
+        # 2nd call: preliminary result
+        mock_resp_2 = MagicMock()
+        mock_resp_2.status_code = 200
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Prelim answer"}]}}]
+        }
+        # 3rd call: final synthesis
+        mock_resp_3 = MagicMock()
+        mock_resp_3.status_code = 200
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Synthesized final explanation"}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find files.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{"name": "filesystem.list_directory", "server": "filesystem", "description": "List files", "input_schema": {}, "type": "mcp"}]
+            mock_registry_inst.tools = {
+                "filesystem.list_directory": (MagicMock(), {
+                    "name": "filesystem.list_directory",
+                    "server": "filesystem",
+                    "description": "List files",
+                    "input_schema": {},
+                    "type": "mcp",
+                    "original_name": "list_directory"
+                })
+            }
+            mock_registry_inst.execute_tool.return_value = {"files": ["main.py"]}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+
+            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(execution.result, "Synthesized final explanation")
+            # Verify three API calls (tool call -> prelim result -> final synthesis)
+            self.assertEqual(mock_post.call_count, 3)
+
+            # Check that synthesis received actual tool results
+            synthesis_call_args = mock_post.call_args_list[2][1]
+            synthesis_prompt = synthesis_call_args['json']['contents'][0]['parts'][0]['text']
+            self.assertIn("filesystem.list_directory", synthesis_prompt)
+            self.assertIn('{"files": ["main.py"]}', synthesis_prompt)
+
+    @patch('requests.post')
+    def test_tool_failure_does_not_trigger_bash_and_is_synthesized(self, mock_post):
+        # 1st call: request tool
+        mock_resp_1 = MagicMock()
+        mock_resp_1.status_code = 200
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "/invalid"}}}'}]}}]
+        }
+        # 2nd call: prelim answer reflecting failure
+        mock_resp_2 = MagicMock()
+        mock_resp_2.status_code = 200
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Could not read dir"}]}}]
+        }
+        # 3rd call: final synthesis explaining failure
+        mock_resp_3 = MagicMock()
+        mock_resp_3.status_code = 200
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "The filesystem listing failed, so I could not answer."}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Read directory.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{"name": "filesystem.list_directory", "server": "filesystem", "description": "List files", "input_schema": {}, "type": "mcp"}]
+            mock_registry_inst.tools = {
+                "filesystem.list_directory": (MagicMock(), {
+                    "name": "filesystem.list_directory",
+                    "server": "filesystem",
+                    "description": "List files",
+                    "input_schema": {},
+                    "type": "mcp",
+                    "original_name": "list_directory"
+                })
+            }
+            # Simulate tool error
+            mock_registry_inst.execute_tool.return_value = {"error": "Permission denied"}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+
+            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(execution.result, "The filesystem listing failed, so I could not answer.")
+
+            # Verify no bash tool execution event was triggered
+            events = ExecutionEvent.objects.filter(task=task)
+            event_types = [e.event_type for e in events]
+            self.assertNotIn('FALLBACK_SELECTED', event_types)
+            self.assertIn('TOOL_FAILED', event_types)
+
+            # Verify synthesis prompt contains the failure details
+            synthesis_prompt = mock_post.call_args_list[2][1]['json']['contents'][0]['parts'][0]['text']
+            self.assertIn('Status: FAILED', synthesis_prompt)
+            self.assertIn("Permission denied", synthesis_prompt)
+
+    @patch('requests.post')
+    def test_synthesis_max_step_termination(self, mock_post):
+        # Always return a tool call to hit max steps
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "."}}}'}]}}]
+        }
+        # Final synthesis response after max steps reached
+        mock_resp_synth = MagicMock()
+        mock_resp_synth.status_code = 200
+        mock_resp_synth.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "I reached the maximum step limit."}]}}]
+        }
+        mock_post.side_effect = [mock_resp] * 5 + [mock_resp_synth]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Infinite loop task.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{"name": "filesystem.list_directory", "server": "filesystem", "description": "List files", "input_schema": {}, "type": "mcp"}]
+            mock_registry_inst.tools = {
+                "filesystem.list_directory": (MagicMock(), {
+                    "name": "filesystem.list_directory",
+                    "server": "filesystem",
+                    "description": "List files",
+                    "input_schema": {},
+                    "type": "mcp",
+                    "original_name": "list_directory"
+                })
+            }
+            mock_registry_inst.execute_tool.return_value = {"files": []}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+
+            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(execution.result, "I reached the maximum step limit.")
+
+            # Verify prompt contains step limit limitation warning
+            synthesis_prompt = mock_post.call_args_list[5][1]['json']['contents'][0]['parts'][0]['text']
+            self.assertIn("LIMITATION: The agent reached its maximum execution step limit", synthesis_prompt)
+
+    @patch('requests.post')
+    def test_synthesis_empty_response_fails_execution(self, mock_post):
+        # Returns tool call
+        mock_resp_1 = MagicMock()
+        mock_resp_1.status_code = 200
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "."}}}'}]}}]
+        }
+        # Returns prelim answer
+        mock_resp_2 = MagicMock()
+        mock_resp_2.status_code = 200
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Prelim answer"}]}}]
+        }
+        # Returns empty/null result on synthesis call
+        mock_resp_3 = MagicMock()
+        mock_resp_3.status_code = 200
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": ""}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Empty synthesis task.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{"name": "filesystem.list_directory", "server": "filesystem", "description": "List files", "input_schema": {}, "type": "mcp"}]
+            mock_registry_inst.tools = {
+                "filesystem.list_directory": (MagicMock(), {
+                    "name": "filesystem.list_directory",
+                    "server": "filesystem",
+                    "description": "List files",
+                    "input_schema": {},
+                    "type": "mcp",
+                    "original_name": "list_directory"
+                })
+            }
+            mock_registry_inst.execute_tool.return_value = {"result": "ok"}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+
+            # Synthesis failure must result in FAILED status, not COMPLETED
+            self.assertEqual(execution.status, 'FAILED')
+            self.assertEqual(task.status, 'FAILED')
+            self.assertIn("Provider returned an empty response.", execution.error)
+
+    @patch('requests.post')
+    def test_synthesis_secrets_sanitization(self, mock_post):
+        # 1st call: request tool returning sensitive info
+        mock_resp_1 = MagicMock()
+        mock_resp_1.status_code = 200
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "."}}}'}]}}]
+        }
+        # 2nd call: prelim answer containing key
+        mock_resp_2 = MagicMock()
+        mock_resp_2.status_code = 200
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "My API key is fake-key"}]}}]
+        }
+        # 3rd call: final synthesis
+        mock_resp_3 = MagicMock()
+        mock_resp_3.status_code = 200
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Redacted final output"}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Sanitize key.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{"name": "filesystem.list_directory", "server": "filesystem", "description": "List files", "input_schema": {}, "type": "mcp"}]
+            mock_registry_inst.tools = {
+                "filesystem.list_directory": (MagicMock(), {
+                    "name": "filesystem.list_directory",
+                    "server": "filesystem",
+                    "description": "List files",
+                    "input_schema": {},
+                    "type": "mcp",
+                    "original_name": "list_directory"
+                })
+            }
+            # Return sensitive key in tool result
+            mock_registry_inst.execute_tool.return_value = {"password": "secret-password-123"}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+
+            self.assertEqual(execution.status, 'COMPLETED')
+            
+            # Check Action logs to verify no raw sensitive key or password was persisted
+            actions = Action.objects.filter(execution=execution)
+            for action in actions:
+                action_str = json.dumps(action.output_data) + json.dumps(action.input_data)
+                self.assertNotIn("secret-password-123", action_str)
+                self.assertNotIn("fake-key", action_str)
+
+            # Check ExecutionEvent logs
+            events = ExecutionEvent.objects.filter(task=task)
+            for event in events:
+                event_str = json.dumps(event.metadata)
+                self.assertNotIn("secret-password-123", event_str)
+                self.assertNotIn("fake-key", event_str)
+
 

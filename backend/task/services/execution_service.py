@@ -251,6 +251,7 @@ class ExecutionService:
         max_steps = 5
         conversation_history = []
         final_result = ""
+        executed_actions = []
 
         try:
             while step < max_steps:
@@ -409,6 +410,13 @@ class ExecutionService:
                         tool_action.completed_at = timezone.now()
                         tool_action.save()
 
+                        executed_actions.append({
+                            "tool_name": tool_name,
+                            "arguments": sanitize_data(tool_args, resolved_key),
+                            "result": sanitize_data(tool_result, resolved_key),
+                            "status": "FAILED" if "error" in tool_result else "SUCCESS"
+                        })
+
                         # Create TOOL_COMPLETED or TOOL_FAILED event
                         if "error" in tool_result:
                             ExecutionEvent.objects.create(
@@ -422,7 +430,7 @@ class ExecutionService:
                                 task=task,
                                 execution=execution,
                                 event_type='TOOL_COMPLETED',
-                                metadata=sanitize_data({'tool_name': tool_name, 'status': 'COMPLETED', 'result_summary': str(tool_result)[:150]}, resolved_key)
+                                metadata=sanitize_data({'tool_name': tool_name, 'status': 'COMPLETED', 'result_summary': str(sanitize_data(tool_result, resolved_key))[:150]}, resolved_key)
                             )
                     else:
                         # Log selected and failed immediately for blocked / invalid tools
@@ -432,10 +440,16 @@ class ExecutionService:
                             event_type='TOOL_FAILED',
                             metadata=sanitize_data({'tool_name': tool_name, 'error': tool_result["error"]}, resolved_key)
                         )
+                        executed_actions.append({
+                            "tool_name": tool_name,
+                            "arguments": sanitize_data(tool_args, resolved_key),
+                            "result": sanitize_data(tool_result, resolved_key),
+                            "status": "FAILED"
+                        })
 
                     # Append turn to conversation history
                     conversation_history.append(f"Model Request: {clean_output}")
-                    conversation_history.append(f"Tool Result: {json.dumps(tool_result)}")
+                    conversation_history.append(f"Tool Result: {json.dumps(sanitize_data(tool_result, resolved_key))}")
 
                     step += 1
                 else:
@@ -457,6 +471,114 @@ class ExecutionService:
 
             if step >= max_steps and not final_result:
                 final_result = "Agent reached maximum step limit without yielding a final answer."
+
+            # Conditional final synthesis
+            requires_synthesis = (len(executed_actions) > 0) or (not final_result) or (step >= max_steps)
+            if requires_synthesis:
+                synthesis_prompt = (
+                    "You are producing the final user-facing result for a task you just executed.\n\n"
+                    f"ORIGINAL USER TASK:\n{task.problem_statement}\n\n"
+                    "EXECUTION CONTEXT:\n"
+                )
+                if executed_actions:
+                    synthesis_prompt += "Actions/Tools actually performed:\n"
+                    for idx, act in enumerate(executed_actions, 1):
+                        raw_res_str = json.dumps(act['result'])
+                        if len(raw_res_str) > 1000:
+                            truncated_res = raw_res_str[:1000] + "\n... [TRUNCATED DUE TO SIZE] ..."
+                        else:
+                            truncated_res = raw_res_str
+                        synthesis_prompt += (
+                            f"{idx}. Tool: {act['tool_name']}\n"
+                            f"   Arguments: {json.dumps(act['arguments'])}\n"
+                            f"   Status: {act['status']}\n"
+                            f"   Result: {truncated_res}\n\n"
+                        )
+                else:
+                    synthesis_prompt += "No tools were executed for this task.\n\n"
+
+                events = ExecutionEvent.objects.filter(task=task).order_by('timestamp')
+                synthesis_prompt += "Execution Events Timeline:\n"
+                for ev in events:
+                    synthesis_prompt += f"- {ev.event_type}: {json.dumps(ev.metadata)}\n"
+                synthesis_prompt += "\n"
+
+                if final_result:
+                    synthesis_prompt += f"Initial model response / context:\n{final_result}\n\n"
+
+                if step >= max_steps:
+                    synthesis_prompt += "LIMITATION: The agent reached its maximum execution step limit without a clean final answer.\n\n"
+
+                synthesis_system_instruction = (
+                    "You are producing the final user-facing result for a task you just executed.\n"
+                    "Only describe actions that actually occurred according to the execution context.\n"
+                    "Do not claim a tool was used unless the execution context confirms it.\n"
+                    "Do not invent results.\n"
+                    "If a tool failed, say so clearly.\n"
+                    "If the task could not be completed, explicitly say what remains incomplete and why.\n"
+                    "Answer the original user request directly.\n"
+                    "Produce natural-language Markdown suitable for direct display to the user.\n"
+                    "Do not output JSON."
+                )
+
+                try:
+                    synthesis_action = Action.objects.create(
+                        execution=execution,
+                        agent=agent,
+                        action_type='synthesize_final_response',
+                        status='RUNNING',
+                        input_data=sanitize_data({'prompt': synthesis_prompt[-500:]}, resolved_key)
+                    )
+                    ExecutionEvent.objects.create(
+                        task=task,
+                        execution=execution,
+                        event_type='ACTION_STARTED',
+                        metadata=sanitize_data({'action_id': str(synthesis_action.id), 'action_type': 'synthesize_final_response'}, resolved_key)
+                    )
+
+                    synthesized_output, mode = model_provider.generate(
+                        synthesis_prompt,
+                        system_instruction=synthesis_system_instruction,
+                        api_key=resolved_key,
+                        model=execution.model
+                    )
+
+                    execution.mode = mode
+                    execution.save()
+
+                    if not synthesized_output or not synthesized_output.strip():
+                        raise ValueError("Provider returned an empty response.")
+
+                    if synthesized_output.startswith("Error:"):
+                        raise Exception(synthesized_output)
+
+                    synthesis_action.status = 'COMPLETED'
+                    synthesis_action.output_data = sanitize_data({'result': synthesized_output}, resolved_key)
+                    synthesis_action.completed_at = timezone.now()
+                    synthesis_action.save()
+
+                    ExecutionEvent.objects.create(
+                        task=task,
+                        execution=execution,
+                        event_type='ACTION_COMPLETED',
+                        metadata=sanitize_data({'action_id': str(synthesis_action.id), 'status': 'COMPLETED'}, resolved_key)
+                    )
+
+                    final_result = synthesized_output
+                except Exception as se:
+                    if 'synthesis_action' in locals() and synthesis_action:
+                        synthesis_action.status = 'FAILED'
+                        synthesis_action.output_data = sanitize_data({'error': str(se)}, resolved_key)
+                        synthesis_action.completed_at = timezone.now()
+                        synthesis_action.save()
+
+                        ExecutionEvent.objects.create(
+                            task=task,
+                            execution=execution,
+                            event_type='ACTION_COMPLETED',
+                            metadata=sanitize_data({'action_id': str(synthesis_action.id), 'status': 'FAILED', 'error': str(se)}, resolved_key)
+                        )
+                    raise se
 
             # Complete TaskExecution
             execution.status = 'COMPLETED'
@@ -484,19 +606,19 @@ class ExecutionService:
             )
 
         except Exception as e:
-            # Mark Action as FAILED
-            action.status = 'FAILED'
-            action.output_data = sanitize_data({'error': str(e)}, resolved_key)
-            action.completed_at = timezone.now()
-            action.save()
+            # Mark Action as FAILED safely if action is defined
+            if 'action' in locals() and action:
+                action.status = 'FAILED'
+                action.output_data = sanitize_data({'error': str(e)}, resolved_key)
+                action.completed_at = timezone.now()
+                action.save()
 
-            # Log ACTION_COMPLETED (failed) event
-            ExecutionEvent.objects.create(
-                task=task,
-                execution=execution,
-                event_type='ACTION_COMPLETED',
-                metadata=sanitize_data({'action_id': str(action.id), 'status': 'FAILED', 'error': str(e)}, resolved_key)
-            )
+                ExecutionEvent.objects.create(
+                    task=task,
+                    execution=execution,
+                    event_type='ACTION_COMPLETED',
+                    metadata=sanitize_data({'action_id': str(action.id), 'status': 'FAILED', 'error': str(e)}, resolved_key)
+                )
 
             # Update TaskExecution to FAILED
             execution.status = 'FAILED'

@@ -177,7 +177,7 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
                   <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
                 ) : (
                   <div className="markdown-body-chat" style={styles.markdownWrapper}>
-                    <MarkdownRenderer content={m.content} />
+                    <MarkdownRenderer text={m.content} />
                   </div>
                 )}
                 

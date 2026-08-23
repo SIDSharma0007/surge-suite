@@ -978,15 +978,58 @@ export default function Dashboard() {
                                   </div>
                                 </div>
 
-                                {/* Final Output Result */}
-                                {selectedTask.result && (
-                                  <div style={styles.resultBoxRedesign}>
-                                    <h4 style={styles.resultHeader}>Result</h4>
-                                    <div style={{ padding: '16px' }}>
-                                      <MarkdownRenderer text={selectedTask.result} />
+                                {/* Agent Result Section */}
+                                {selectedTask.status === 'COMPLETED' ? (
+                                  selectedTask.result ? (
+                                    <div style={styles.resultBoxRedesign}>
+                                      <h4 style={{...styles.resultHeader, borderLeft: '4px solid var(--status-success, #22c55e)'}}>Agent Result</h4>
+                                      <div style={{ padding: '16px' }}>
+                                        <MarkdownRenderer text={selectedTask.result} />
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div style={{
+                                      marginTop: '20px',
+                                      padding: '16px',
+                                      backgroundColor: 'rgba(239, 68, 68, 0.05)',
+                                      border: '1px dashed var(--status-error, #ef4444)',
+                                      borderRadius: 'var(--radius-md)',
+                                      color: 'var(--status-error, #ef4444)',
+                                      fontSize: '13px',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '8px'
+                                    }}>
+                                      <span>⚠️</span>
+                                      <span>The agent completed execution but did not produce a final response.</span>
+                                    </div>
+                                  )
+                                ) : selectedTask.status === 'FAILED' ? (
+                                  <div style={{
+                                    marginTop: '20px',
+                                    backgroundColor: 'rgba(239, 68, 68, 0.05)',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    borderRadius: 'var(--radius-md)',
+                                    overflow: 'hidden'
+                                  }}>
+                                    <h4 style={{
+                                      ...styles.resultHeader,
+                                      borderBottom: '1px solid rgba(239, 68, 68, 0.2)',
+                                      color: 'var(--status-error, #ef4444)',
+                                      borderLeft: '4px solid var(--status-error, #ef4444)'
+                                    }}>
+                                      Execution Failed
+                                    </h4>
+                                    <div style={{ padding: '16px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                                      <p style={{ margin: '0 0 8px 0', fontWeight: '600', color: 'var(--status-error, #ef4444)' }}>
+                                        The task could not be completed successfully.
+                                      </p>
+                                      <div style={{ fontFamily: 'monospace', fontSize: '12px', background: 'rgba(0,0,0,0.05)', padding: '10px', borderRadius: '4px', whiteSpace: 'pre-wrap' }}>
+                                        {selectedTask.result || (activeExec?.error) || "The task execution failed with an unknown error."}
+                                      </div>
                                     </div>
                                   </div>
-                                )}
+                                ) : null}
 
                                 {/* Tools Used */}
                                 {(() => {
