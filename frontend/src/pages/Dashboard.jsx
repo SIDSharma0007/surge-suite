@@ -5,6 +5,8 @@ import ThemeToggle from '../components/ThemeToggle';
 import Notes from './Notes.jsx';
 import SettingsTab from '../components/SettingsTab';
 import MarkdownRenderer from '../components/MarkdownRenderer';
+import VoiceCommandButton from '../components/VoiceCommandButton';
+import { useVoiceRecognition } from '../hooks/useVoiceRecognition';
 import { workspaceServices } from '../services/workspaceServices';
 import { taskServices } from '../services/taskServices';
 import { 
@@ -60,6 +62,22 @@ export default function Dashboard() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [executingTaskId, setExecutingTaskId] = useState(null);
   const [taskError, setTaskError] = useState('');
+
+  // Voice recognition hook for multilingual voice commands
+  const {
+    isListening: isVoiceListening,
+    interimTranscript: voiceInterimTranscript,
+    language: voiceLanguage,
+    changeLanguage: setVoiceLanguage,
+    startListening: startVoiceListening,
+    stopListening: stopVoiceListening,
+    error: voiceError,
+    isSupported: isVoiceSupported
+  } = useVoiceRecognition({
+    onResult: (fullText) => {
+      setTaskProblemStatement(fullText);
+    }
+  });
 
   const loadTasks = async (wsId) => {
     if (!wsId) return;
@@ -821,22 +839,57 @@ export default function Dashboard() {
                             <h3 style={styles.sectionTitle}>New Agent Task</h3>
                           </div>
                           <form onSubmit={handleCreateTask} style={styles.taskForm}>
-                            <textarea
-                              value={taskProblemStatement}
-                              onChange={(e) => setTaskProblemStatement(e.target.value)}
-                              placeholder="Describe the task you want to execute (e.g. Research Python OCR libraries)..."
-                              style={styles.taskTextarea}
-                              rows={3}
-                              disabled={executingTaskId !== null}
-                            />
-                            <button
-                              type="submit"
-                              className="action-btn"
-                              style={{ ...styles.actionBtn, marginTop: '12px' }}
-                              disabled={executingTaskId !== null || !taskProblemStatement.trim()}
-                            >
-                              {executingTaskId ? 'Executing...' : 'Run Task'}
-                            </button>
+                            <div style={{ position: 'relative' }}>
+                              {isVoiceListening && (
+                                <div style={styles.voiceActiveBanner}>
+                                  <span style={styles.voiceActivePulse} />
+                                  <span style={styles.voiceActiveText}>
+                                    Listening in {voiceLanguage === 'hi-IN' ? 'हिन्दी' : voiceLanguage === 'bn-IN' ? 'বাংলা' : voiceLanguage === 'or-IN' ? 'ଓଡ଼ିଆ' : 'English'}... Speak now
+                                  </span>
+                                  {voiceInterimTranscript && (
+                                    <span style={styles.voiceInterimLive}>
+                                      "{voiceInterimTranscript}"
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              <textarea
+                                value={taskProblemStatement}
+                                onChange={(e) => setTaskProblemStatement(e.target.value)}
+                                placeholder={
+                                  isVoiceListening
+                                    ? "🎙️ Listening... speak in your language (e.g. 'create note', 'book a lab')..."
+                                    : "Describe the task to execute, or click Voice Input to speak in English, हिन्दी, বাংলা, or ଓଡ଼ିଆ..."
+                                }
+                                style={{
+                                  ...styles.taskTextarea,
+                                  border: isVoiceListening ? '1px solid var(--status-error, #ef4444)' : styles.taskTextarea.border,
+                                  boxShadow: isVoiceListening ? '0 0 0 2px rgba(239, 68, 68, 0.2)' : 'none',
+                                }}
+                                rows={3}
+                                disabled={executingTaskId !== null}
+                              />
+                            </div>
+                            <div style={styles.taskFormActions}>
+                              <VoiceCommandButton
+                                isListening={isVoiceListening}
+                                onStart={() => startVoiceListening(taskProblemStatement)}
+                                onStop={stopVoiceListening}
+                                selectedLanguage={voiceLanguage}
+                                onLanguageChange={setVoiceLanguage}
+                                error={voiceError}
+                                isSupported={isVoiceSupported}
+                                disabled={executingTaskId !== null}
+                              />
+                              <button
+                                type="submit"
+                                className="action-btn"
+                                style={styles.actionBtn}
+                                disabled={executingTaskId !== null || !taskProblemStatement.trim()}
+                              >
+                                {executingTaskId ? 'Executing...' : 'Run Task'}
+                              </button>
+                            </div>
                           </form>
                         </section>
 
@@ -2052,5 +2105,45 @@ const styles = {
     color: 'var(--text-muted)',
     textAlign: 'center',
     margin: '20px 0',
+  },
+  taskFormActions: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: '12px',
+    flexWrap: 'wrap',
+    gap: '8px',
+  },
+  voiceActiveBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '6px 12px',
+    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+    border: '1px solid rgba(239, 68, 68, 0.25)',
+    borderRadius: 'var(--radius-sm, 6px) var(--radius-sm, 6px) 0 0',
+    marginBottom: '-1px',
+    fontSize: '11px',
+    flexWrap: 'wrap',
+  },
+  voiceActivePulse: {
+    width: '7px',
+    height: '7px',
+    borderRadius: '50%',
+    backgroundColor: 'var(--status-error, #ef4444)',
+    display: 'inline-block',
+    animation: 'pulse 1.5s infinite',
+    flexShrink: 0,
+  },
+  voiceActiveText: {
+    fontWeight: '600',
+    color: 'var(--status-error, #ef4444)',
+    fontSize: '11px',
+  },
+  voiceInterimLive: {
+    fontStyle: 'italic',
+    color: 'var(--text-secondary)',
+    fontSize: '11px',
+    marginLeft: '4px',
   },
 };

@@ -242,6 +242,10 @@ class ExecutionService:
             "Do NOT wrap your final response in the JSON tool call format. Tool calls are internal execution instructions and must not be included in the final user-facing answer."
         )
 
+        # Enhance system instruction with Indic / multilingual directives (Hindi, Bengali, Odia, English)
+        from .multilingual_prompt import enhance_system_instruction
+        system_instruction = enhance_system_instruction(system_instruction, task.problem_statement)
+
         prompt_with_history = (
             f"AVAILABLE TOOLS:\n{capabilities_text}\n\n"
             f"Task: {task.problem_statement}\n\n"
