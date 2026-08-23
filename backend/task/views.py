@@ -107,6 +107,143 @@ class TaskViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(task)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['get'], permission_classes=[IsWorkspaceMemberForTask])
+    def walkthrough(self, request, pk=None):
+        import os
+        from django.conf import settings
+        from django.http import HttpResponse
+        task = get_object_or_404(Task, id=pk)
+        self.check_object_permissions(request, task)
+
+        artifact_path = os.path.join(os.path.dirname(settings.BASE_DIR), '.surge', 'task-artifacts', str(task.id), 'walkthrough.md')
+        if not os.path.exists(artifact_path):
+            return Response(
+                {"error": "Walkthrough artifact has not been generated for this task."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            with open(artifact_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            if request.query_params.get('download') == 'true':
+                response = HttpResponse(content, content_type='text/markdown')
+                response['Content-Disposition'] = f'attachment; filename="walkthrough-{str(task.id)[:8]}.md"'
+                return response
+
+            return Response({
+                "task_id": str(task.id),
+                "filename": "walkthrough.md",
+                "content": content
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to read walkthrough artifact: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(
+        detail=True,
+        methods=['post'],
+        permission_classes=[IsWorkspaceMemberForTask],
+        url_path=r'approvals/(?P<approval_id>[0-9a-f-]+)/approve'
+    )
+    def approve_command(self, request, pk=None, approval_id=None):
+        """
+        Phase 4.7: Approve a pending shell command authorization request.
+
+        POST /tasks/{task_id}/approvals/{approval_id}/approve/
+
+        The command is re-classified immediately before execution.
+        BLOCKED commands cannot be approved even via this endpoint.
+        """
+        from .services.approval_service import ApprovalService, ApprovalValidationError
+
+        task = get_object_or_404(Task, id=pk)
+        self.check_object_permissions(request, task)
+
+        if task.status != 'WAITING_FOR_APPROVAL':
+            return Response(
+                {"error": f"Task is not waiting for approval (current status: {task.status})."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not approval_id:
+            return Response(
+                {"error": "approval_id is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            approval_service = ApprovalService()
+            approval_service.resolve_approve(
+                approval_id=approval_id,
+                task_id=str(pk),
+                resolving_user=request.user
+            )
+        except ApprovalValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"error": f"Approval processing failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        task.refresh_from_db()
+        serializer = self.get_serializer(task)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=['post'],
+        permission_classes=[IsWorkspaceMemberForTask],
+        url_path=r'approvals/(?P<approval_id>[0-9a-f-]+)/deny'
+    )
+    def deny_command(self, request, pk=None, approval_id=None):
+        """
+        Phase 4.7: Deny a pending shell command authorization request.
+
+        POST /tasks/{task_id}/approvals/{approval_id}/deny/
+
+        The command is NEVER executed after denial.
+        The agent receives explicit denial feedback and adapts its response.
+        """
+        from .services.approval_service import ApprovalService, ApprovalValidationError
+
+        task = get_object_or_404(Task, id=pk)
+        self.check_object_permissions(request, task)
+
+        if task.status != 'WAITING_FOR_APPROVAL':
+            return Response(
+                {"error": f"Task is not waiting for approval (current status: {task.status})."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not approval_id:
+            return Response(
+                {"error": "approval_id is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            approval_service = ApprovalService()
+            approval_service.resolve_deny(
+                approval_id=approval_id,
+                task_id=str(pk),
+                resolving_user=request.user
+            )
+        except ApprovalValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"error": f"Denial processing failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        task.refresh_from_db()
+        serializer = self.get_serializer(task)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 from rest_framework.views import APIView
 from django.db import transaction
 from .models import UserProviderCredential

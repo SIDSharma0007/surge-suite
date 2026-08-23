@@ -26,7 +26,10 @@ import {
   AlertCircle,
   Archive,
   ClipboardList,
-  MessageSquare
+  MessageSquare,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldX
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -62,6 +65,10 @@ export default function Dashboard() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [executingTaskId, setExecutingTaskId] = useState(null);
   const [taskError, setTaskError] = useState('');
+  // Phase 4.7: approval action state
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalError, setApprovalError] = useState('');
+  const [viewingWalkthrough, setViewingWalkthrough] = useState(false);
 
   const loadTasks = async (wsId) => {
     if (!wsId) return;
@@ -89,6 +96,7 @@ export default function Dashboard() {
   const handleExecuteTask = async (taskId) => {
     setExecutingTaskId(taskId);
     setTaskError('');
+    setApprovalError('');
     try {
       await taskServices.execute(taskId);
       await refreshTaskDetails(taskId);
@@ -98,6 +106,36 @@ export default function Dashboard() {
       await refreshTaskDetails(taskId);
     } finally {
       setExecutingTaskId(null);
+    }
+  };
+
+  const handleApproveCommand = async (taskId, approvalId) => {
+    setApprovalLoading(true);
+    setApprovalError('');
+    try {
+      await taskServices.approve(taskId, approvalId);
+      await refreshTaskDetails(taskId);
+    } catch (err) {
+      console.error(err);
+      setApprovalError("Approval failed: " + (err.response?.data?.error || err.message));
+      await refreshTaskDetails(taskId);
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  const handleDenyCommand = async (taskId, approvalId) => {
+    setApprovalLoading(true);
+    setApprovalError('');
+    try {
+      await taskServices.deny(taskId, approvalId);
+      await refreshTaskDetails(taskId);
+    } catch (err) {
+      console.error(err);
+      setApprovalError("Denial failed: " + (err.response?.data?.error || err.message));
+      await refreshTaskDetails(taskId);
+    } finally {
+      setApprovalLoading(false);
     }
   };
 
@@ -127,11 +165,15 @@ export default function Dashboard() {
     }
   }, [activeWorkspaceId, activeTab]);
 
-  // Periodic polling for task status if currently selected task is RUNNING or PENDING
+  // Periodic polling for task status if currently selected task is RUNNING, PENDING, or WAITING_FOR_APPROVAL
   useEffect(() => {
     if (!selectedTaskId || activeTab !== 'Tasks') return;
     const selectedTask = tasks.find(t => t.id === selectedTaskId);
-    if (!selectedTask || (selectedTask.status !== 'RUNNING' && selectedTask.status !== 'PENDING')) return;
+    if (!selectedTask || (
+      selectedTask.status !== 'RUNNING' &&
+      selectedTask.status !== 'PENDING' &&
+      selectedTask.status !== 'WAITING_FOR_APPROVAL'
+    )) return;
 
     const interval = setInterval(() => {
       refreshTaskDetails(selectedTaskId);
@@ -875,9 +917,9 @@ export default function Dashboard() {
                                     <div style={styles.taskItemHeader}>
                                       <span style={{
                                         ...styles.statusBadge,
-                                        background: t.status === 'COMPLETED' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'FAILED' ? 'rgba(239, 68, 68, 0.1)' : t.status === 'RUNNING' ? 'rgba(234, 179, 8, 0.1)' : 'rgba(107, 114, 128, 0.1)',
-                                        color: t.status === 'COMPLETED' ? 'var(--status-success, #22c55e)' : t.status === 'FAILED' ? 'var(--status-error, #ef4444)' : t.status === 'RUNNING' ? 'var(--status-warning, #eab308)' : 'var(--text-muted)',
-                                        border: t.status === 'COMPLETED' ? '1px solid rgba(34, 197, 94, 0.2)' : t.status === 'FAILED' ? '1px solid rgba(239, 68, 68, 0.2)' : t.status === 'RUNNING' ? '1px solid rgba(234, 179, 8, 0.2)' : '1px solid rgba(107, 114, 128, 0.2)'
+                                       background: t.status === 'COMPLETED' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'FAILED' ? 'rgba(239, 68, 68, 0.1)' : t.status === 'RUNNING' ? 'rgba(234, 179, 8, 0.1)' : t.status === 'WAITING_FOR_APPROVAL' ? 'rgba(249, 115, 22, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                        color: t.status === 'COMPLETED' ? 'var(--status-success, #22c55e)' : t.status === 'FAILED' ? 'var(--status-error, #ef4444)' : t.status === 'RUNNING' ? 'var(--status-warning, #eab308)' : t.status === 'WAITING_FOR_APPROVAL' ? '#f97316' : 'var(--text-muted)',
+                                        border: t.status === 'COMPLETED' ? '1px solid rgba(34, 197, 94, 0.2)' : t.status === 'FAILED' ? '1px solid rgba(239, 68, 68, 0.2)' : t.status === 'RUNNING' ? '1px solid rgba(234, 179, 8, 0.2)' : t.status === 'WAITING_FOR_APPROVAL' ? '1px solid rgba(249, 115, 22, 0.4)' : '1px solid rgba(107, 114, 128, 0.2)'
                                       }}>
                                         {t.status}
                                       </span>
@@ -911,7 +953,7 @@ export default function Dashboard() {
                               <div style={styles.taskDetailCard}>
                                 <div style={styles.detailCardHeader}>
                                   <h3 style={styles.detailTitle}>Task Details</h3>
-                                  {selectedTask.status !== 'RUNNING' && (
+                                  {selectedTask.status !== 'RUNNING' && selectedTask.status !== 'WAITING_FOR_APPROVAL' && (
                                     <button
                                       onClick={() => handleExecuteTask(selectedTask.id)}
                                       style={{ ...styles.btnSave, padding: '6px 12px', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontWeight: '600', fontSize: 'var(--text-xs)' }}
@@ -931,9 +973,9 @@ export default function Dashboard() {
                                     <span style={styles.detailTableLabel}>Status</span>
                                     <span style={{
                                       ...styles.statusBadge,
-                                      background: selectedTask.status === 'COMPLETED' ? 'rgba(34, 197, 94, 0.1)' : selectedTask.status === 'FAILED' ? 'rgba(239, 68, 68, 0.1)' : selectedTask.status === 'RUNNING' ? 'rgba(234, 179, 8, 0.1)' : 'rgba(107, 114, 128, 0.1)',
-                                      color: selectedTask.status === 'COMPLETED' ? 'var(--status-success, #22c55e)' : selectedTask.status === 'FAILED' ? 'var(--status-error, #ef4444)' : selectedTask.status === 'RUNNING' ? 'var(--status-warning, #eab308)' : 'var(--text-muted)',
-                                      border: selectedTask.status === 'COMPLETED' ? '1px solid rgba(34, 197, 94, 0.2)' : selectedTask.status === 'FAILED' ? '1px solid rgba(239, 68, 68, 0.2)' : selectedTask.status === 'RUNNING' ? '1px solid rgba(234, 179, 8, 0.2)' : '1px solid rgba(107, 114, 128, 0.2)'
+                                      background: selectedTask.status === 'COMPLETED' ? 'rgba(34, 197, 94, 0.1)' : selectedTask.status === 'FAILED' ? 'rgba(239, 68, 68, 0.1)' : selectedTask.status === 'RUNNING' ? 'rgba(234, 179, 8, 0.1)' : selectedTask.status === 'WAITING_FOR_APPROVAL' ? 'rgba(249, 115, 22, 0.15)' : 'rgba(107, 114, 128, 0.1)',
+                                      color: selectedTask.status === 'COMPLETED' ? 'var(--status-success, #22c55e)' : selectedTask.status === 'FAILED' ? 'var(--status-error, #ef4444)' : selectedTask.status === 'RUNNING' ? 'var(--status-warning, #eab308)' : selectedTask.status === 'WAITING_FOR_APPROVAL' ? '#f97316' : 'var(--text-muted)',
+                                      border: selectedTask.status === 'COMPLETED' ? '1px solid rgba(34, 197, 94, 0.2)' : selectedTask.status === 'FAILED' ? '1px solid rgba(239, 68, 68, 0.2)' : selectedTask.status === 'RUNNING' ? '1px solid rgba(234, 179, 8, 0.2)' : selectedTask.status === 'WAITING_FOR_APPROVAL' ? '1px solid rgba(249, 115, 22, 0.4)' : '1px solid rgba(107, 114, 128, 0.2)'
                                     }}>
                                       {selectedTask.status}
                                     </span>
@@ -977,6 +1019,132 @@ export default function Dashboard() {
                                     </span>
                                   </div>
                                 </div>
+
+                                {/* Phase 4.7: Human Approval Panel */}
+                                {selectedTask.status === 'WAITING_FOR_APPROVAL' && selectedTask.pending_approval && (() => {
+                                  const ap = selectedTask.pending_approval;
+                                  return (
+                                    <div style={{
+                                      marginTop: '20px',
+                                      background: 'rgba(249, 115, 22, 0.06)',
+                                      border: '1.5px solid rgba(249, 115, 22, 0.45)',
+                                      borderRadius: 'var(--radius-md)',
+                                      overflow: 'hidden'
+                                    }}>
+                                      <div style={{
+                                        padding: '14px 16px',
+                                        borderBottom: '1px solid rgba(249, 115, 22, 0.25)',
+                                        background: 'rgba(249, 115, 22, 0.1)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '10px'
+                                      }}>
+                                        <span style={{ fontSize: '18px' }}>🔐</span>
+                                        <div>
+                                          <div style={{ fontWeight: '700', fontSize: '13px', color: '#f97316' }}>Shell Command Requires Your Approval</div>
+                                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>The agent is paused. Clicking Allow Once executes only this exact command.</div>
+                                        </div>
+                                      </div>
+                                      <div style={{ padding: '14px 16px' }}>
+                                        <div style={{ marginBottom: '10px' }}>
+                                          <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Requested Command</div>
+                                          <code style={{
+                                            display: 'block',
+                                            padding: '10px 12px',
+                                            background: 'var(--bg-input, rgba(0,0,0,0.15))',
+                                            borderRadius: '6px',
+                                            fontSize: '12px',
+                                            fontFamily: 'monospace',
+                                            color: '#f97316',
+                                            wordBreak: 'break-all',
+                                            border: '1px solid rgba(249, 115, 22, 0.2)'
+                                          }}>{ap.sanitized_display_command}</code>
+                                        </div>
+                                        {ap.reason && (
+                                          <div style={{ marginBottom: '10px' }}>
+                                            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agent Reasoning</div>
+                                            <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>{ap.reason}</p>
+                                          </div>
+                                        )}
+                                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
+                                          <div>
+                                            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Risk: </span>
+                                            <span style={{
+                                              padding: '2px 8px',
+                                              borderRadius: '100px',
+                                              fontSize: '11px',
+                                              fontWeight: '600',
+                                              background: ap.risk === 'HIGH' ? 'rgba(239,68,68,0.12)' : ap.risk === 'MEDIUM' ? 'rgba(249,115,22,0.12)' : 'rgba(234,179,8,0.12)',
+                                              color: ap.risk === 'HIGH' ? '#ef4444' : ap.risk === 'MEDIUM' ? '#f97316' : '#eab308',
+                                              border: `1px solid ${ap.risk === 'HIGH' ? 'rgba(239,68,68,0.3)' : ap.risk === 'MEDIUM' ? 'rgba(249,115,22,0.3)' : 'rgba(234,179,8,0.3)'}`
+                                            }}>{ap.risk}</span>
+                                          </div>
+                                          {ap.expires_at && (
+                                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                              Expires: {new Date(ap.expires_at).toLocaleString()}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div style={{ padding: '8px 10px', background: 'rgba(249,115,22,0.06)', borderRadius: '6px', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '14px', border: '1px dashed rgba(249,115,22,0.3)' }}>
+                                          ⚠️ <strong>Allow Once</strong> grants permission for this exact command only. It does not permanently whitelist this command or grant broader shell access.
+                                        </div>
+                                        {approvalError && (
+                                          <div style={{ marginBottom: '10px', padding: '8px 10px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', fontSize: '12px', color: '#ef4444' }}>
+                                            {approvalError}
+                                          </div>
+                                        )}
+                                        <div style={{ display: 'flex', gap: '10px' }}>
+                                          <button
+                                            id={`approve-btn-${ap.id}`}
+                                            onClick={() => handleApproveCommand(selectedTask.id, ap.id)}
+                                            disabled={approvalLoading}
+                                            style={{
+                                              flex: 1,
+                                              padding: '10px',
+                                              background: approvalLoading ? 'rgba(34,197,94,0.1)' : 'rgba(34, 197, 94, 0.15)',
+                                              border: '1.5px solid rgba(34, 197, 94, 0.4)',
+                                              borderRadius: '8px',
+                                              color: '#22c55e',
+                                              fontWeight: '700',
+                                              fontSize: '13px',
+                                              cursor: approvalLoading ? 'not-allowed' : 'pointer',
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'center',
+                                              gap: '6px',
+                                              opacity: approvalLoading ? 0.6 : 1
+                                            }}
+                                          >
+                                            {approvalLoading ? '⏳ Processing...' : '✅ Allow Once'}
+                                          </button>
+                                          <button
+                                            id={`deny-btn-${ap.id}`}
+                                            onClick={() => handleDenyCommand(selectedTask.id, ap.id)}
+                                            disabled={approvalLoading}
+                                            style={{
+                                              flex: 1,
+                                              padding: '10px',
+                                              background: approvalLoading ? 'rgba(239,68,68,0.05)' : 'rgba(239, 68, 68, 0.1)',
+                                              border: '1.5px solid rgba(239, 68, 68, 0.35)',
+                                              borderRadius: '8px',
+                                              color: '#ef4444',
+                                              fontWeight: '700',
+                                              fontSize: '13px',
+                                              cursor: approvalLoading ? 'not-allowed' : 'pointer',
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'center',
+                                              gap: '6px',
+                                              opacity: approvalLoading ? 0.6 : 1
+                                            }}
+                                          >
+                                            {approvalLoading ? '⏳ Processing...' : '❌ Deny'}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
 
                                 {/* Agent Result Section */}
                                 {selectedTask.status === 'COMPLETED' ? (
@@ -1031,6 +1199,69 @@ export default function Dashboard() {
                                   </div>
                                 ) : null}
 
+                                {/* Execution Walkthrough Artifact Section */}
+                                {selectedTask.walkthrough && (
+                                  <div style={{ marginTop: '20px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                      <h4 style={styles.timelineHeader}>Execution Walkthrough</h4>
+                                      <div style={{ display: 'flex', gap: '8px' }}>
+                                        <button
+                                          type="button"
+                                          onClick={() => setViewingWalkthrough(!viewingWalkthrough)}
+                                          style={{
+                                            padding: '4px 10px',
+                                            fontSize: '12px',
+                                            fontWeight: '600',
+                                            color: 'var(--text-primary)',
+                                            background: 'var(--bg-hover)',
+                                            border: '1px solid var(--border-light)',
+                                            borderRadius: 'var(--radius-sm)',
+                                            cursor: 'pointer'
+                                          }}
+                                        >
+                                          {viewingWalkthrough ? 'Hide walkthrough.md' : 'View walkthrough.md'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const blob = new Blob([selectedTask.walkthrough], { type: 'text/markdown' });
+                                            const url = URL.createObjectURL(blob);
+                                            const a = document.createElement('a');
+                                            a.href = url;
+                                            a.download = `walkthrough-${selectedTask.id.slice(0, 8)}.md`;
+                                            a.click();
+                                            URL.revokeObjectURL(url);
+                                          }}
+                                          style={{
+                                            padding: '4px 10px',
+                                            fontSize: '12px',
+                                            fontWeight: '600',
+                                            color: 'var(--text-primary)',
+                                            background: 'var(--bg-hover)',
+                                            border: '1px solid var(--border-light)',
+                                            borderRadius: 'var(--radius-sm)',
+                                            cursor: 'pointer'
+                                          }}
+                                        >
+                                          Download
+                                        </button>
+                                      </div>
+                                    </div>
+                                    {viewingWalkthrough && (
+                                      <div style={{
+                                        padding: '16px',
+                                        background: 'var(--bg-primary)',
+                                        border: '1px solid var(--border-light)',
+                                        borderRadius: 'var(--radius-md)',
+                                        maxHeight: '400px',
+                                        overflowY: 'auto'
+                                      }}>
+                                        <MarkdownRenderer text={selectedTask.walkthrough} />
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
                                 {/* Tools Used */}
                                 {(() => {
                                   const executedTools = [];
@@ -1084,7 +1315,12 @@ export default function Dashboard() {
                                             EXECUTION_COMPLETED: "Execution completed",
                                             EXECUTION_FAILED: "Execution failed",
                                             ACTION_STARTED: "Model query started",
-                                            ACTION_COMPLETED: "Model query completed"
+                                            ACTION_COMPLETED: "Model query completed",
+                                            APPROVAL_REQUESTED: "⏸ Awaiting human approval",
+                                            APPROVAL_APPROVED: "✅ Shell command approved",
+                                            APPROVAL_DENIED: "❌ Shell command denied",
+                                            APPROVAL_EXECUTED: "Shell command executed",
+                                            APPROVAL_SECURITY_BLOCKED: "🚫 Command blocked at execution",
                                           };
                                           
                                           let base = titles[event.event_type] || event.event_type;

@@ -1,6 +1,7 @@
 from django.utils import timezone
-from task.models import Task, TaskExecution, Action, ExecutionEvent
+from task.models import Task, TaskExecution, Action, ExecutionEvent, HumanApprovalRequest
 from .model_provider import RealGeminiModelProvider, FakeModelProvider
+from .capability_registry import ApprovalRequiredException
 import json
 import re
 
@@ -40,6 +41,332 @@ class ExecutionService:
     def __init__(self, provider=None):
         # Defaults to the RealGeminiModelProvider, but allows FakeModelProvider injection
         self.provider = provider or RealGeminiModelProvider()
+
+    def _determine_external_state_requirement(self, task_statement: str, available_tools_info: list) -> bool:
+        """
+        Lightweight, tool-driven determination of whether a task requires external state execution.
+        Inspects available tool descriptions, names, and action verbs against the task statement.
+        """
+        if not available_tools_info or not task_statement:
+            return False
+            
+        statement_lower = task_statement.lower()
+
+        # Check for explicit filesystem, workspace inspection, or file inquiry
+        filesystem_intents = [
+            r"\b(list|show|inspect|check|find|get|view|determine|locate)\b.*\b(file|files|dir|dirs|directory|directories|folder|folders|workspace|path|paths)\b",
+            r"\b(file|files|dir|dirs|directory|directories|folder|folders|workspace)\b.*\b(exist|exists|present|list|inspect|contents|structure)\b",
+            r"\b(\.md|\.py|\.json|\.txt|\.js|\.jsx|readme|package\.json)\b",
+            r"\b(filesystem|file system)\b",
+        ]
+        for pattern in filesystem_intents:
+            if re.search(pattern, statement_lower):
+                return True
+
+        # Check for explicit search intents if search tool is registered
+        has_search_tool = any("search" in t.get("name", "").lower() for t in available_tools_info)
+        if has_search_tool:
+            search_intents = [
+                r"\b(search the web|web search|google|look up online|search online|find online)\b",
+            ]
+            for pattern in search_intents:
+                if re.search(pattern, statement_lower):
+                    return True
+
+        # Check for explicit database query intents if database tool is registered
+        has_db_tool = any("database" in t.get("name", "").lower() or "query" in t.get("name", "").lower() for t in available_tools_info)
+        if has_db_tool:
+            db_intents = [
+                r"\b(query the database|run sql|database query|select from|database table)\b",
+            ]
+            for pattern in db_intents:
+                if re.search(pattern, statement_lower):
+                    return True
+
+        return False
+
+    def _extract_and_validate_tool_call(self, output: str, registered_tools: dict) -> tuple[dict | None, str | None, bool]:
+        """
+        Robust tool-call extraction and schema validation.
+        Order of extraction:
+        1. Strict JSON parse.
+        2. Markdown code fences (```json ... ``` or ``` ... ```).
+        3. Balanced candidate JSON blocks scanning { ... }.
+        4. Validation of structure, tool registration, arguments type, and required fields.
+
+        Returns: (tool_call_dict, error_message, is_tool_call_attempt)
+        """
+        if not output:
+            return None, None, False
+
+        clean_output = output.strip()
+        candidates = []
+
+        # 1. Strict full JSON parse
+        try:
+            parsed = json.loads(clean_output)
+            if isinstance(parsed, (dict, list)):
+                candidates.append(parsed)
+        except Exception:
+            pass
+
+        # 2. Markdown code fences: ```json ... ``` or ``` ... ```
+        fence_matches = re.findall(r'```(?:json)?\s*([\s\S]*?)\s*```', output, re.IGNORECASE)
+        for fence in fence_matches:
+            try:
+                parsed = json.loads(fence.strip())
+                if isinstance(parsed, (dict, list)):
+                    candidates.append(parsed)
+            except Exception:
+                pass
+
+        # 3. Balanced candidate JSON objects scanning
+        depth = 0
+        start_idx = None
+        for idx, ch in enumerate(output):
+            if ch == '{':
+                if depth == 0:
+                    start_idx = idx
+                depth += 1
+            elif ch == '}':
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start_idx is not None:
+                        candidate_str = output[start_idx:idx+1]
+                        try:
+                            parsed = json.loads(candidate_str)
+                            if isinstance(parsed, dict):
+                                candidates.append(parsed)
+                        except Exception:
+                            pass
+                        start_idx = None
+
+        # Check if the model attempted a tool call (explicit tool_call structure or code fence)
+        has_tool_indicators = False
+        if '"tool_call"' in clean_output or '```json' in clean_output:
+            has_tool_indicators = True
+        elif clean_output.startswith('{') and any(k in clean_output for k in ['"name"', '"tool"', '"action"']):
+            has_tool_indicators = True
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+
+            tc_data = None
+            if "tool_call" in candidate and isinstance(candidate["tool_call"], dict):
+                tc_data = candidate["tool_call"]
+            elif "name" in candidate and ("arguments" in candidate or candidate.get("name") in registered_tools):
+                tc_data = candidate
+            elif "tool" in candidate and "arguments" in candidate:
+                tc_data = {"name": candidate["tool"], "arguments": candidate.get("arguments", {})}
+
+            if tc_data and isinstance(tc_data, dict):
+                tool_name = tc_data.get("name")
+                tool_args = tc_data.get("arguments", {})
+
+                if not isinstance(tool_name, str) or not tool_name.strip():
+                    return None, "Malformed tool call: Missing or non-string tool name.", True
+
+                tool_name = tool_name.strip()
+
+                if tool_name not in registered_tools:
+                    return None, f"Tool '{tool_name}' is not registered in available tools.", True
+
+                if not isinstance(tool_args, dict):
+                    return None, f"Tool '{tool_name}' arguments must be a JSON object/dictionary.", True
+
+                # Validate required arguments from schema
+                tool_info = registered_tools[tool_name]
+                schema = tool_info.get("schema") or {}
+                required_fields = schema.get("required", [])
+                if isinstance(required_fields, list):
+                    for req_field in required_fields:
+                        if req_field not in tool_args:
+                            return None, f"Tool '{tool_name}' missing required argument: '{req_field}'.", True
+
+                return {"name": tool_name, "arguments": tool_args}, None, True
+
+        if has_tool_indicators:
+            return None, "Malformed tool call syntax: Failed to extract valid JSON tool_call structure.", True
+
+        return None, None, False
+
+    def _generate_walkthrough(
+        self,
+        task,
+        execution,
+        executed_actions,
+        final_result,
+        is_real,
+        provider_name,
+        model_name,
+        required_capabilities=None,
+        task_requirements_satisfied=True,
+        sensitive_key=None
+    ) -> str:
+        """
+        Constructs an execution-grounded walkthrough.md document from real execution evidence.
+        Saves it to <workspace_root>/.surge/task-artifacts/<task_id>/walkthrough.md.
+        """
+        import os
+        from django.conf import settings
+        workspace_root = os.path.dirname(settings.BASE_DIR)
+        artifact_dir = os.path.join(workspace_root, '.surge', 'task-artifacts', str(task.id))
+        os.makedirs(artifact_dir, exist_ok=True)
+        walkthrough_path = os.path.join(artifact_dir, 'walkthrough.md')
+
+        status_str = task.status
+        agent_name = task.assigned_agent.name if task.assigned_agent else "Unassigned"
+        exec_mode = execution.mode if (execution and execution.mode) else ("REAL" if is_real else "SIMULATED")
+
+        successful_actions = [act for act in executed_actions if act.get("status") == "SUCCESS"]
+        failed_actions = [act for act in executed_actions if act.get("status") == "FAILED"]
+
+        # Format successful tools used
+        tools_sections = []
+        if successful_actions:
+            for act in successful_actions:
+                t_name = act.get('tool_name', 'Unknown Tool')
+                t_status = act.get('status', 'SUCCESS')
+                t_args = act.get('arguments', {})
+                t_res = act.get('result', {})
+
+                args_lines = []
+                if isinstance(t_args, dict):
+                    for k, v in t_args.items():
+                        args_lines.append(f"  - {k}: `{v}`")
+                else:
+                    args_lines.append(f"  - {t_args}")
+                args_formatted = "\n".join(args_lines) if args_lines else "  - None"
+
+                res_str = json.dumps(t_res) if isinstance(t_res, (dict, list)) else str(t_res)
+                if len(res_str) > 1000:
+                    res_str = res_str[:1000] + "\n... [TRUNCATED DUE TO SIZE] ..."
+
+                tools_sections.append(
+                    f"### {t_name}\n\n"
+                    f"- Status: {t_status}\n"
+                    f"- Arguments:\n{args_formatted}\n"
+                    f"- Result:\n```\n{res_str}\n```"
+                )
+            tools_content = "\n\n".join(tools_sections)
+        else:
+            tools_content = "None"
+
+        # Format failed attempts
+        failed_sections = []
+        if failed_actions:
+            for act in failed_actions:
+                t_name = act.get('tool_name', 'Unknown Tool')
+                t_args = act.get('arguments', {})
+                t_res = act.get('result', {})
+
+                args_lines = []
+                if isinstance(t_args, dict):
+                    for k, v in t_args.items():
+                        args_lines.append(f"  - {k}: `{v}`")
+                else:
+                    args_lines.append(f"  - {t_args}")
+                args_formatted = "\n".join(args_lines) if args_lines else "  - None"
+
+                err_str = json.dumps(t_res) if isinstance(t_res, (dict, list)) else str(t_res)
+                failed_sections.append(
+                    f"### {t_name}\n\n"
+                    f"- Status: FAILED\n"
+                    f"- Arguments:\n{args_formatted}\n"
+                    f"- Error:\n```\n{err_str}\n```"
+                )
+            failed_content = "\n\n".join(failed_sections)
+        else:
+            failed_content = "None"
+
+        # Format timeline from ExecutionEvents
+        events = ExecutionEvent.objects.filter(task=task).order_by('timestamp')
+        timeline_lines = []
+        for idx, ev in enumerate(events, 1):
+            timeline_lines.append(f"{idx}. {ev.event_type}")
+        timeline_content = "\n".join(timeline_lines) if timeline_lines else "1. Task initiated"
+
+        # Format Shell Command Approvals
+        from task.models import HumanApprovalRequest
+        approvals = HumanApprovalRequest.objects.filter(task=task).order_by('created_at')
+        approval_sections = []
+        if approvals.exists():
+            for app in approvals:
+                status_emoji = "⏳" if app.status == "PENDING" else ("✅" if app.status == "APPROVED" else "❌")
+                decision_str = f"Human Decision: {app.status} {status_emoji}"
+                
+                result_section = ""
+                if app.status == "APPROVED" and app.execution_result:
+                    app_res = app.execution_result
+                    stdout_str = app_res.get('stdout') or ''
+                    stderr_str = app_res.get('stderr') or ''
+                    err_str = app_res.get('error') or ''
+                    if len(stdout_str) > 1000:
+                        stdout_str = stdout_str[:1000] + "\n... [TRUNCATED DUE TO SIZE] ..."
+                    if len(stderr_str) > 500:
+                        stderr_str = stderr_str[:500] + "\n... [TRUNCATED] ..."
+                    result_section = (
+                        f"\n  - Exit Code: {app_res.get('exit_code')}\n"
+                        f"  - Output:\n  ```\n  {stdout_str or err_str or stderr_str}\n  ```"
+                    )
+                
+                approval_sections.append(
+                    f"- Command requested: `{app.sanitized_display_command}`\n"
+                    f"  {decision_str}\n"
+                    f"  Reason: {app.reason}\n"
+                    f"  Requested At: {app.created_at.isoformat()}"
+                    f"{result_section}"
+                )
+            approval_content = "\n".join(approval_sections)
+        else:
+            approval_content = "None"
+
+        # Why the task failed (if failed)
+        if status_str == "FAILED":
+            if required_capabilities and not task_requirements_satisfied:
+                why_failed = f"The task required {', '.join(required_capabilities)} inspection, but no successful evidence was obtained."
+            else:
+                why_failed = (execution.error if execution else None) or task.result or "The task could not be completed successfully."
+        else:
+            why_failed = "None"
+
+        # Workspace modifications
+        mod_summary = "- Files created: None\n- Files modified: None\n- Files deleted: None\n- Workspace modified: NO"
+
+        walkthrough_text = (
+            f"# Task Walkthrough\n\n"
+            f"## Task\n\n"
+            f"{task.problem_statement}\n\n"
+            f"## Execution Summary\n\n"
+            f"- Status: {status_str}\n"
+            f"- Agent: {agent_name}\n"
+            f"- Provider: {provider_name}\n"
+            f"- Model: {model_name}\n"
+            f"- Execution Mode: {exec_mode}\n"
+            f"- Evidence Obtained: {'YES' if len(successful_actions) > 0 else 'NO'}\n\n"
+            f"## Tools Used\n\n"
+            f"{tools_content}\n\n"
+            f"## Shell Command Approvals\n\n"
+            f"{approval_content}\n\n"
+            f"## Failed Attempts\n\n"
+            f"{failed_content}\n\n"
+            f"## Why The Task Failed\n\n"
+            f"{why_failed}\n\n"
+            f"## Execution Timeline\n\n"
+            f"{timeline_content}\n\n"
+            f"## Final Result\n\n"
+            f"{final_result}\n\n"
+            f"## Modification Summary\n\n"
+            f"{mod_summary}\n"
+        )
+
+        sanitized_walkthrough = sanitize_data(walkthrough_text, sensitive_key)
+
+        with open(walkthrough_path, 'w', encoding='utf-8') as f:
+            f.write(sanitized_walkthrough)
+
+        return sanitized_walkthrough
 
     def execute_task(self, task, user=None):
         if not task.assigned_agent:
@@ -199,6 +526,23 @@ class ExecutionService:
         builtin_registry = CapabilityRegistry()
         builtin_capabilities = builtin_registry.discover_capabilities()
 
+        # Map of all registered tools and their schemas for validation
+        all_registered_tools = {}
+        for t in mcp_tools:
+            all_registered_tools[t['name']] = {
+                "server": t['server'],
+                "description": t.get('description', ''),
+                "schema": t.get('input_schema', {}),
+                "type": "mcp",
+                "original_name": t.get('original_name', t['name'])
+            }
+        for c in builtin_capabilities:
+            all_registered_tools[c['name']] = {
+                "description": c.get('description', ''),
+                "schema": c.get('schema', {}),
+                "type": c.get('type', 'builtin')
+            }
+
         # Format MCP capabilities
         mcp_cap_texts = []
         for t in mcp_tools:
@@ -223,13 +567,24 @@ class ExecutionService:
         capabilities_text = "AVAILABLE MCP TOOLS:\n" + ("\n".join(mcp_cap_texts) if mcp_cap_texts else "None") + "\n\n"
         capabilities_text += "AVAILABLE BUILTIN & FALLBACK TOOLS:\n" + ("\n".join(builtin_cap_texts) if builtin_cap_texts else "None")
 
+        # Determine if the task semantically requires external state / tools
+        task_requires_external_state = self._determine_external_state_requirement(
+            task.problem_statement,
+            mcp_tools + builtin_capabilities
+        ) if is_real else False
+
         system_instruction = (
             "You are the Surge Suite task agent. Complete the user's task using the capabilities available to you.\n"
-            "MCP tools are preferred. Fallback tools should only be used when no suitable MCP capability exists.\n"
-            "Do NOT automatically invoke bash/fallback merely because an MCP tool failed.\n"
-            "If an MCP tool fails, report the failure and try an intelligent alternative.\n"
-            "Never request, expose, or output API keys, credentials, passwords, tokens, environment variables, or secrets.\n\n"
-            "To call a tool, you MUST respond ONLY with a JSON object in this format (do not output any other text or explanation):\n"
+            "CRITICAL GROUNDING RULES:\n"
+            "- You do NOT possess direct or pre-existing knowledge of the local filesystem, workspace files, directories, live system environment, or external web data.\n"
+            "- You MUST NOT assume, guess, or hallucinate filenames, directory contents, or environment facts.\n"
+            "- If the user task asks you to inspect, list, find, search, or verify files, directories, or external data, your VERY FIRST action MUST be a tool call.\n"
+            "- MCP tools are preferred. Fallback tools should only be used when no suitable MCP capability exists.\n"
+            "- Do NOT automatically invoke bash/fallback merely because an MCP tool failed.\n"
+            "- If an MCP tool fails, report the failure and try an intelligent alternative.\n"
+            "- Never request, expose, or output API keys, credentials, passwords, tokens, environment variables, or secrets.\n\n"
+            "TOOL CALL FORMAT:\n"
+            "To call a tool, respond with a JSON object:\n"
             "{\n"
             "  \"tool_call\": {\n"
             "    \"name\": \"tool_name\",\n"
@@ -238,8 +593,9 @@ class ExecutionService:
             "    }\n"
             "  }\n"
             "}\n\n"
-            "When you have enough information to answer the user, return your final answer in clear natural-language Markdown format. "
-            "Do NOT wrap your final response in the JSON tool call format. Tool calls are internal execution instructions and must not be included in the final user-facing answer."
+            "FINAL ANSWER FORMAT:\n"
+            "Only when you have executed the necessary tools and received real results (or if the task is a purely general conceptual question that requires no external data), return your final answer in clear natural-language Markdown format.\n"
+            "Do NOT wrap your final response in a tool call JSON object."
         )
 
         prompt_with_history = (
@@ -289,25 +645,11 @@ class ExecutionService:
                 execution.mode = mode
                 execution.save()
 
-                # Parse tool call JSON strictly
-                tool_call = None
-                clean_output = output.strip()
-                
-                # Strip markdown code block fences if present
-                if clean_output.startswith("```"):
-                    lines = clean_output.splitlines()
-                    if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].startswith("```"):
-                        clean_output = "\n".join(lines[1:-1]).strip()
-
-                try:
-                    parsed = json.loads(clean_output)
-                    if isinstance(parsed, dict) and len(parsed) == 1 and "tool_call" in parsed:
-                        tc = parsed["tool_call"]
-                        if isinstance(tc, dict) and "name" in tc and "arguments" in tc and len(tc) == 2:
-                            if isinstance(tc["name"], str) and isinstance(tc["arguments"], dict):
-                                tool_call = tc
-                except Exception:
-                    pass
+                # Robust tool call extraction & validation
+                tool_call, validation_error, is_tool_attempt = self._extract_and_validate_tool_call(
+                    output,
+                    all_registered_tools
+                )
 
                 if tool_call:
                     tool_name = tool_call.get("name")
@@ -401,6 +743,81 @@ class ExecutionService:
                                 tool_result = mcp_registry.execute_tool(tool_name, tool_args)
                             elif is_builtin:
                                 tool_result = builtin_registry.execute_tool(tool_name, tool_args)
+                        except ApprovalRequiredException as approval_exc:
+                            # -------------------------------------------------------
+                            # Phase 4.7: Command requires human approval.
+                            # Pause execution — do NOT mark COMPLETED or FAILED.
+                            # -------------------------------------------------------
+                            from django.utils import timezone as tz
+
+                            # Sanitize the display version of the command
+                            sanitized_cmd = sanitize_data(approval_exc.command, resolved_key)
+
+                            approval_req = HumanApprovalRequest.objects.create(
+                                task=task,
+                                execution=execution,
+                                workspace=task.workspace,
+                                requested_by=user,
+                                action=tool_action,
+                                command=approval_exc.command,
+                                sanitized_display_command=sanitized_cmd,
+                                reason=approval_exc.reason,
+                                risk=approval_exc.risk,
+                                status='PENDING',
+                                expires_at=tz.now() + timezone.timedelta(hours=24)
+                            )
+
+                            ExecutionEvent.objects.create(
+                                task=task,
+                                execution=execution,
+                                event_type='APPROVAL_REQUESTED',
+                                metadata=sanitize_data({
+                                    'approval_id': str(approval_req.id),
+                                    'command': sanitized_cmd,
+                                    'reason': approval_exc.reason,
+                                    'risk': approval_exc.risk,
+                                    'expires_at': approval_req.expires_at.isoformat()
+                                }, resolved_key)
+                            )
+
+                            # Pause: transition both task and execution to WAITING_FOR_APPROVAL
+                            execution.status = 'WAITING_FOR_APPROVAL'
+                            execution.save()
+                            task.status = 'WAITING_FOR_APPROVAL'
+                            task.save()
+
+                            # Mark the tool action record as awaiting approval
+                            tool_action.status = 'PENDING'
+                            tool_action.output_data = sanitize_data({
+                                'awaiting_approval': str(approval_req.id),
+                                'command': sanitized_cmd
+                            }, resolved_key)
+                            tool_action.save()
+
+                            # Mark the outer model-generation action as completed
+                            action.status = 'COMPLETED'
+                            action.output_data = sanitize_data({'tool_call': tool_call}, resolved_key)
+                            action.completed_at = timezone.now()
+                            action.save()
+
+                            # Generate paused walkthrough artifact
+                            self._generate_walkthrough(
+                                task=task,
+                                execution=execution,
+                                executed_actions=executed_actions,
+                                final_result="Execution paused waiting for user approval.",
+                                is_real=is_real,
+                                provider_name=provider_name,
+                                model_name=model_name,
+                                required_capabilities=None,
+                                task_requirements_satisfied=False,
+                                sensitive_key=resolved_key
+                            )
+
+                            # Shut down MCP before returning
+                            mcp_registry.shutdown()
+                            return execution
+
                         except Exception as e:
                             tool_result = {"error": str(e)}
 
@@ -448,14 +865,15 @@ class ExecutionService:
                         })
 
                     # Append turn to conversation history
-                    conversation_history.append(f"Model Request: {clean_output}")
-                    conversation_history.append(f"Tool Result: {json.dumps(sanitize_data(tool_result, resolved_key))}")
+                    conversation_history.append(f"Model Request: {json.dumps({'tool_call': tool_call})}")
+                    conversation_history.append(f"Tool Result ({tool_name}): {json.dumps(sanitize_data(tool_result, resolved_key))}")
 
                     step += 1
-                else:
-                    # Final answer received from model
-                    action.status = 'COMPLETED'
-                    action.output_data = sanitize_data({'result': output}, resolved_key)
+
+                elif is_tool_attempt:
+                    # Tool call was attempted but invalid or failed schema validation
+                    action.status = 'FAILED'
+                    action.output_data = sanitize_data({'error': validation_error, 'raw_output': output[:300]}, resolved_key)
                     action.completed_at = timezone.now()
                     action.save()
 
@@ -463,14 +881,67 @@ class ExecutionService:
                         task=task,
                         execution=execution,
                         event_type='ACTION_COMPLETED',
-                        metadata=sanitize_data({'action_id': str(action.id), 'status': 'COMPLETED'}, resolved_key)
+                        metadata=sanitize_data({'action_id': str(action.id), 'status': 'FAILED', 'error': validation_error}, resolved_key)
+                    )
+                    ExecutionEvent.objects.create(
+                        task=task,
+                        execution=execution,
+                        event_type='TOOL_FAILED',
+                        metadata=sanitize_data({'error': validation_error}, resolved_key)
                     )
 
-                    final_result = output
-                    break
+                    conversation_history.append(f"Model Response: {output}")
+                    conversation_history.append(f"Tool Call Error: {validation_error}. Please provide a valid JSON tool_call matching the registered schema.")
+                    step += 1
+
+                else:
+                    # Direct Natural-Language Response (No tool call structure found)
+                    if len(executed_actions) > 0 or not task_requires_external_state:
+                        # Legitimate answer: either tools were already executed, or task is purely conceptual
+                        action.status = 'COMPLETED'
+                        action.output_data = sanitize_data({'result': output}, resolved_key)
+                        action.completed_at = timezone.now()
+                        action.save()
+
+                        ExecutionEvent.objects.create(
+                            task=task,
+                            execution=execution,
+                            event_type='ACTION_COMPLETED',
+                            metadata=sanitize_data({'action_id': str(action.id), 'status': 'COMPLETED'}, resolved_key)
+                        )
+
+                        final_result = output
+                        break
+                    else:
+                        # Task requires external state inspection, but model produced direct answer without executing tools
+                        action.status = 'FAILED'
+                        action.output_data = sanitize_data({'error': 'Direct answer rejected: Task requires tool execution before answering.'}, resolved_key)
+                        action.completed_at = timezone.now()
+                        action.save()
+
+                        ExecutionEvent.objects.create(
+                            task=task,
+                            execution=execution,
+                            event_type='ACTION_COMPLETED',
+                            metadata=sanitize_data({'action_id': str(action.id), 'status': 'FAILED', 'error': 'Tool execution required'}, resolved_key)
+                        )
+
+                        conversation_history.append(f"Model Response: {output}")
+                        conversation_history.append(
+                            "Correction: You do NOT have direct access to local files or workspace data. "
+                            "This task requires inspecting real workspace state. You have NOT executed any tools yet. "
+                            "You MUST execute an appropriate tool via a JSON tool_call before providing a final answer. "
+                            "Do NOT guess or hallucinate."
+                        )
+                        step += 1
 
             if step >= max_steps and not final_result:
+                if task_requires_external_state and len(executed_actions) == 0:
+                    raise RuntimeError("Agent failed to execute the required tools to inspect workspace state within maximum steps.")
                 final_result = "Agent reached maximum step limit without yielding a final answer."
+
+            if task_requires_external_state and len(executed_actions) == 0:
+                raise RuntimeError("Task requires external state inspection, but no tools were executed.")
 
             # Conditional final synthesis
             requires_synthesis = (len(executed_actions) > 0) or (not final_result) or (step >= max_steps)
@@ -605,6 +1076,20 @@ class ExecutionService:
                 metadata=sanitize_data({'status': 'SUCCESS'}, resolved_key)
             )
 
+            # Generate task-grounded walkthrough artifact
+            self._generate_walkthrough(
+                task=task,
+                execution=execution,
+                executed_actions=executed_actions,
+                final_result=task.result,
+                is_real=is_real,
+                provider_name=provider_name,
+                model_name=model_name,
+                required_capabilities=None,
+                task_requirements_satisfied=True,
+                sensitive_key=resolved_key
+            )
+
         except Exception as e:
             # Mark Action as FAILED safely if action is defined
             if 'action' in locals() and action:
@@ -637,6 +1122,478 @@ class ExecutionService:
                 execution=execution,
                 event_type='EXECUTION_FAILED',
                 metadata=sanitize_data({'error': str(e)}, resolved_key)
+            )
+
+            # Generate failure walkthrough artifact
+            self._generate_walkthrough(
+                task=task,
+                execution=execution,
+                executed_actions=executed_actions if 'executed_actions' in locals() else [],
+                final_result=task.result,
+                is_real=is_real if 'is_real' in locals() else False,
+                provider_name=provider_name if 'provider_name' in locals() else 'unknown',
+                model_name=model_name if 'model_name' in locals() else 'unknown',
+                required_capabilities=None,
+                task_requirements_satisfied=False,
+                sensitive_key=resolved_key if 'resolved_key' in locals() else None
+            )
+
+        finally:
+            mcp_registry.shutdown()
+
+        return execution
+
+    def resume_from_approval(self, task, execution, approval, tool_result_or_denial, user=None, is_approved=True):
+        """
+        Resume a paused agentic execution after human approval resolution.
+
+        Does NOT create a new TaskExecution. Injects the approval outcome into
+        the existing conversation context, then continues through Phase 4.6 synthesis.
+
+        Args:
+            task:                    The Task being executed.
+            execution:               The paused TaskExecution.
+            approval:                The resolved HumanApprovalRequest.
+            tool_result_or_denial:   dict tool result (approved) or str denial message.
+            user:                    The resolving user.
+            is_approved:             True if approved, False if denied.
+        """
+        agent = execution.agent
+        sanitized_cmd = approval.sanitized_display_command
+
+        # Determine provider and API key
+        is_override = self.provider and not isinstance(self.provider, RealGeminiModelProvider)
+        resolved_key = None
+        if not is_override:
+            workspace = task.workspace
+            provider_name = workspace.ai_provider or 'simulated'
+            model_name = workspace.ai_model or 'dev-mock'
+            from .model_provider import get_model_provider_by_name
+            try:
+                model_provider, is_real = get_model_provider_by_name(provider_name)
+            except ValueError:
+                model_provider = FakeModelProvider()
+                is_real = False
+            if is_real:
+                from task.models import UserProviderCredential
+                from task.utils.encryption import decrypt_value
+                target_user = user or task.creator
+                try:
+                    cred = UserProviderCredential.objects.get(
+                        user=target_user, provider=provider_name.lower()
+                    )
+                    resolved_key = decrypt_value(cred.encrypted_api_key)
+                except UserProviderCredential.DoesNotExist:
+                    resolved_key = None
+        else:
+            model_provider = self.provider
+            is_real = not isinstance(self.provider, FakeModelProvider)
+            provider_name = 'simulated'
+            model_name = 'dev-mock'
+
+        # Transition back to RUNNING
+        task.status = 'RUNNING'
+        task.save()
+        execution.status = 'RUNNING'
+        execution.save()
+
+        # Reconstruct conversation history from existing Action records
+        conversation_history = []
+        executed_actions = []
+
+        prior_actions = Action.objects.filter(execution=execution).order_by('created_at')
+        for act in prior_actions:
+            if act.action_type == 'generate_response' and act.status == 'COMPLETED':
+                tc = act.output_data.get('tool_call')
+                if tc:
+                    conversation_history.append(f"Model Request: {json.dumps({'tool_call': tc})}")
+            elif act.action_type == 'execute_tool' and act.status == 'COMPLETED':
+                t_name = act.input_data.get('tool_name', 'unknown')
+                t_result = act.output_data.get('result', {})
+                conversation_history.append(
+                    f"Tool Result ({t_name}): {json.dumps(sanitize_data(t_result, resolved_key))}"
+                )
+                executed_actions.append({
+                    "tool_name": t_name,
+                    "arguments": sanitize_data(act.input_data.get('arguments', {}), resolved_key),
+                    "result": sanitize_data(t_result, resolved_key),
+                    "status": "FAILED" if "error" in str(t_result) else "SUCCESS"
+                })
+
+        # Inject approval outcome
+        if is_approved:
+            tool_result = tool_result_or_denial
+            conversation_history.append(
+                f"Model Request: {json.dumps({'tool_call': {'name': 'bash.execute', 'arguments': {'command': sanitized_cmd}}})}"
+            )
+            conversation_history.append(
+                f"Tool Result (bash.execute): {json.dumps(sanitize_data(tool_result, resolved_key))}\n"
+                "[Human approval was granted for the exact requested command. "
+                "The command was executed and the result above is available.]"
+            )
+            executed_actions.append({
+                "tool_name": "bash.execute",
+                "arguments": sanitize_data({"command": sanitized_cmd}, resolved_key),
+                "result": sanitize_data(tool_result, resolved_key),
+                "status": "FAILED" if "error" in tool_result else "SUCCESS"
+            })
+        else:
+            conversation_history.append(str(tool_result_or_denial))
+
+        # Re-initialize MCP and builtin registries
+        from .mcp.registry import MCPRegistry
+        from .capability_registry import CapabilityRegistry
+
+        mcp_registry = MCPRegistry()
+        try:
+            mcp_registry.initialize_servers()
+            mcp_tools = mcp_registry.discover_tools()
+        except Exception:
+            mcp_tools = []
+
+        builtin_registry = CapabilityRegistry()
+        builtin_capabilities = builtin_registry.discover_capabilities()
+
+        all_registered_tools = {}
+        for t in mcp_tools:
+            all_registered_tools[t['name']] = {
+                "server": t['server'],
+                "description": t.get('description', ''),
+                "schema": t.get('input_schema', {}),
+                "type": "mcp",
+                "original_name": t.get('original_name', t['name'])
+            }
+        for c in builtin_capabilities:
+            all_registered_tools[c['name']] = {
+                "description": c.get('description', ''),
+                "schema": c.get('schema', {}),
+                "type": c.get('type', 'builtin')
+            }
+
+        mcp_cap_texts = [
+            f"- Tool: {t['name']}\n  Type: mcp\n  Server: {t['server']}\n  Description: {t['description']}\n  Arguments Schema: {json.dumps(t['input_schema'])}"
+            for t in mcp_tools
+        ]
+        builtin_cap_texts = [
+            f"- Tool: {c['name']}\n  Type: {c['type']}\n  Description: {c['description']}\n  Arguments Schema: {json.dumps(c['schema'])}"
+            for c in builtin_capabilities
+        ]
+        capabilities_text = (
+            "AVAILABLE MCP TOOLS:\n" + ("\n".join(mcp_cap_texts) if mcp_cap_texts else "None") + "\n\n"
+            "AVAILABLE BUILTIN & FALLBACK TOOLS:\n" + ("\n".join(builtin_cap_texts) if builtin_cap_texts else "None")
+        )
+
+        system_instruction = (
+            "You are the Surge Suite task agent. Complete the user's task using the capabilities available to you.\n"
+            "CRITICAL GROUNDING RULES:\n"
+            "- You do NOT possess direct knowledge of the local filesystem or environment.\n"
+            "- MCP tools are preferred. Fallback tools only when no MCP capability exists.\n"
+            "- Never expose API keys, credentials, passwords, tokens, or secrets.\n\n"
+            "TOOL CALL FORMAT:\n"
+            "{\n  \"tool_call\": {\n    \"name\": \"tool_name\",\n    \"arguments\": {\"arg1\": \"val1\"}\n  }\n}\n\n"
+            "FINAL ANSWER FORMAT:\n"
+            "Return your final answer in clear Markdown when you have real tool results or it is a conceptual question.\n"
+            "Do NOT wrap your final response in tool call JSON."
+        )
+
+        prompt_with_history = (
+            f"AVAILABLE TOOLS:\n{capabilities_text}\n\n"
+            f"Task: {task.problem_statement}\n\n"
+        )
+
+        step = 0
+        max_steps = 4
+        final_result = ""
+
+        try:
+            while step < max_steps:
+                current_prompt = prompt_with_history
+                if conversation_history:
+                    current_prompt += "\n" + "\n".join(conversation_history) + "\n"
+
+                action = Action.objects.create(
+                    execution=execution, agent=agent,
+                    action_type='generate_response', status='RUNNING',
+                    input_data=sanitize_data({'prompt': current_prompt[-500:]}, resolved_key)
+                )
+                ExecutionEvent.objects.create(
+                    task=task, execution=execution,
+                    event_type='ACTION_STARTED',
+                    metadata=sanitize_data({'action_id': str(action.id), 'action_type': 'generate_response'}, resolved_key)
+                )
+
+                output, mode = model_provider.generate(
+                    current_prompt,
+                    system_instruction=system_instruction,
+                    api_key=resolved_key,
+                    model=execution.model
+                )
+                execution.mode = mode
+                execution.save()
+
+                tool_call, validation_error, is_tool_attempt = self._extract_and_validate_tool_call(
+                    output, all_registered_tools
+                )
+
+                if tool_call:
+                    t_name = tool_call.get("name")
+                    t_args = tool_call.get("arguments", {})
+                    is_mcp = t_name in mcp_registry.tools
+                    is_builtin = t_name in builtin_registry.capabilities
+                    t_result = None
+
+                    if not is_mcp and not is_builtin:
+                        t_result = {"error": f"Tool '{t_name}' is not registered."}
+
+                    action.status = 'COMPLETED'
+                    action.output_data = sanitize_data({'tool_call': tool_call}, resolved_key)
+                    action.completed_at = timezone.now()
+                    action.save()
+                    ExecutionEvent.objects.create(
+                        task=task, execution=execution,
+                        event_type='ACTION_COMPLETED',
+                        metadata=sanitize_data({'action_id': str(action.id), 'status': 'COMPLETED'}, resolved_key)
+                    )
+
+                    if t_result is None:
+                        sel_type = 'mcp' if is_mcp else 'builtin'
+                        ExecutionEvent.objects.create(
+                            task=task, execution=execution,
+                            event_type='TOOL_SELECTED',
+                            metadata=sanitize_data({'tool_name': t_name, 'type': sel_type}, resolved_key)
+                        )
+                        ExecutionEvent.objects.create(
+                            task=task, execution=execution,
+                            event_type='TOOL_STARTED',
+                            metadata=sanitize_data({'tool_name': t_name, 'arguments': t_args}, resolved_key)
+                        )
+                        tool_exec_action = Action.objects.create(
+                            execution=execution, agent=agent,
+                            action_type='execute_tool', status='RUNNING',
+                            input_data=sanitize_data({'tool_name': t_name, 'arguments': t_args}, resolved_key)
+                        )
+                        try:
+                            if is_mcp:
+                                t_result = mcp_registry.execute_tool(t_name, t_args)
+                            elif is_builtin:
+                                t_result = builtin_registry.execute_tool(t_name, t_args)
+                        except ApprovalRequiredException:
+                            t_result = {"error": "Nested approval required during resumed execution. Use an MCP tool instead."}
+                        except Exception as ex:
+                            t_result = {"error": str(ex)}
+
+                        tool_exec_action.status = 'COMPLETED'
+                        tool_exec_action.output_data = sanitize_data({'result': t_result}, resolved_key)
+                        tool_exec_action.completed_at = timezone.now()
+                        tool_exec_action.save()
+
+                        executed_actions.append({
+                            "tool_name": t_name,
+                            "arguments": sanitize_data(t_args, resolved_key),
+                            "result": sanitize_data(t_result, resolved_key),
+                            "status": "FAILED" if "error" in t_result else "SUCCESS"
+                        })
+
+                        ev_type = 'TOOL_FAILED' if "error" in t_result else 'TOOL_COMPLETED'
+                        ev_meta = {'tool_name': t_name}
+                        if "error" in t_result:
+                            ev_meta['error'] = t_result["error"]
+                        else:
+                            ev_meta['status'] = 'COMPLETED'
+                            ev_meta['result_summary'] = str(sanitize_data(t_result, resolved_key))[:150]
+                        ExecutionEvent.objects.create(
+                            task=task, execution=execution,
+                            event_type=ev_type,
+                            metadata=sanitize_data(ev_meta, resolved_key)
+                        )
+                    else:
+                        ExecutionEvent.objects.create(
+                            task=task, execution=execution,
+                            event_type='TOOL_FAILED',
+                            metadata=sanitize_data({'tool_name': t_name, 'error': t_result["error"]}, resolved_key)
+                        )
+                        executed_actions.append({
+                            "tool_name": t_name,
+                            "arguments": sanitize_data(t_args, resolved_key),
+                            "result": sanitize_data(t_result, resolved_key),
+                            "status": "FAILED"
+                        })
+
+                    conversation_history.append(f"Model Request: {json.dumps({'tool_call': tool_call})}")
+                    conversation_history.append(f"Tool Result ({t_name}): {json.dumps(sanitize_data(t_result, resolved_key))}")
+                    step += 1
+
+                elif is_tool_attempt:
+                    action.status = 'FAILED'
+                    action.output_data = sanitize_data({'error': validation_error, 'raw_output': output[:300]}, resolved_key)
+                    action.completed_at = timezone.now()
+                    action.save()
+                    ExecutionEvent.objects.create(
+                        task=task, execution=execution,
+                        event_type='ACTION_COMPLETED',
+                        metadata=sanitize_data({'action_id': str(action.id), 'status': 'FAILED', 'error': validation_error}, resolved_key)
+                    )
+                    conversation_history.append(f"Model Response: {output}")
+                    conversation_history.append(
+                        f"Tool Call Error: {validation_error}. Provide a valid JSON tool_call."
+                    )
+                    step += 1
+
+                else:
+                    # Natural-language final answer
+                    action.status = 'COMPLETED'
+                    action.output_data = sanitize_data({'result': output}, resolved_key)
+                    action.completed_at = timezone.now()
+                    action.save()
+                    ExecutionEvent.objects.create(
+                        task=task, execution=execution,
+                        event_type='ACTION_COMPLETED',
+                        metadata=sanitize_data({'action_id': str(action.id), 'status': 'COMPLETED'}, resolved_key)
+                    )
+                    final_result = output
+                    break
+
+            if step >= max_steps and not final_result:
+                final_result = "Agent reached maximum step limit after approval resumption."
+
+            # Phase 4.6 synthesis
+            requires_synthesis = bool(executed_actions) or not final_result
+            if requires_synthesis:
+                synthesis_prompt = (
+                    "You are producing the final user-facing result for a task you just executed.\n\n"
+                    f"ORIGINAL USER TASK:\n{task.problem_statement}\n\n"
+                    "EXECUTION CONTEXT:\n"
+                )
+                for idx, act in enumerate(executed_actions, 1):
+                    raw_res_str = json.dumps(act['result'])
+                    truncated_res = raw_res_str[:1000] + "\n... [TRUNCATED]" if len(raw_res_str) > 1000 else raw_res_str
+                    synthesis_prompt += (
+                        f"{idx}. Tool: {act['tool_name']}\n"
+                        f"   Arguments: {json.dumps(act['arguments'])}\n"
+                        f"   Status: {act['status']}\n"
+                        f"   Result: {truncated_res}\n\n"
+                    )
+
+                synthesis_prompt += "Human Approval History:\n"
+                if is_approved:
+                    resolver_name = approval.resolved_by.username if approval.resolved_by else 'user'
+                    synthesis_prompt += (
+                        f"- Shell command `{sanitized_cmd}` was APPROVED by {resolver_name} and executed.\n\n"
+                    )
+                else:
+                    synthesis_prompt += (
+                        f"- Shell command `{sanitized_cmd}` was DENIED. The command was NOT executed.\n\n"
+                    )
+
+                events = ExecutionEvent.objects.filter(task=task).order_by('timestamp')
+                synthesis_prompt += "Execution Events Timeline:\n"
+                for ev in events:
+                    synthesis_prompt += f"- {ev.event_type}: {json.dumps(ev.metadata)}\n"
+                synthesis_prompt += "\n"
+                if final_result:
+                    synthesis_prompt += f"Initial model response / context:\n{final_result}\n\n"
+
+                synthesis_system_instruction = (
+                    "You are producing the final user-facing result for a task you just executed.\n"
+                    "Only describe actions that actually occurred according to the execution context.\n"
+                    "Do not claim a tool was used unless the execution context confirms it.\n"
+                    "Do not invent results. If a command was denied, explicitly say so.\n"
+                    "Answer the original user request directly.\n"
+                    "Produce natural-language Markdown suitable for direct display to the user.\n"
+                    "Do not output JSON."
+                )
+
+                synthesis_action = Action.objects.create(
+                    execution=execution, agent=agent,
+                    action_type='synthesize_final_response', status='RUNNING',
+                    input_data=sanitize_data({'prompt': synthesis_prompt[-500:]}, resolved_key)
+                )
+                ExecutionEvent.objects.create(
+                    task=task, execution=execution,
+                    event_type='ACTION_STARTED',
+                    metadata=sanitize_data({'action_id': str(synthesis_action.id), 'action_type': 'synthesize_final_response'}, resolved_key)
+                )
+
+                synthesized_output, mode = model_provider.generate(
+                    synthesis_prompt,
+                    system_instruction=synthesis_system_instruction,
+                    api_key=resolved_key,
+                    model=execution.model
+                )
+                execution.mode = mode
+                execution.save()
+
+                synthesis_action.status = 'COMPLETED'
+                synthesis_action.output_data = sanitize_data({'result': synthesized_output}, resolved_key)
+                synthesis_action.completed_at = timezone.now()
+                synthesis_action.save()
+                ExecutionEvent.objects.create(
+                    task=task, execution=execution,
+                    event_type='ACTION_COMPLETED',
+                    metadata=sanitize_data({'action_id': str(synthesis_action.id), 'status': 'COMPLETED'}, resolved_key)
+                )
+                final_result = synthesized_output
+
+            # Complete
+            execution.status = 'COMPLETED'
+            execution.result = sanitize_data(final_result, resolved_key)
+            execution.completed_at = timezone.now()
+            execution.save()
+            task.status = 'COMPLETED'
+            task.result = sanitize_data(final_result, resolved_key)
+            task.save()
+
+            ExecutionEvent.objects.create(
+                task=task, execution=execution,
+                event_type='FINAL_RESPONSE_GENERATED',
+                metadata=sanitize_data({'result_length': len(final_result)}, resolved_key)
+            )
+            ExecutionEvent.objects.create(
+                task=task, execution=execution,
+                event_type='EXECUTION_COMPLETED',
+                metadata=sanitize_data({'status': 'SUCCESS'}, resolved_key)
+            )
+
+            # Generate task-grounded walkthrough artifact
+            self._generate_walkthrough(
+                task=task,
+                execution=execution,
+                executed_actions=executed_actions,
+                final_result=task.result,
+                is_real=is_real,
+                provider_name=provider_name,
+                model_name=model_name,
+                required_capabilities=None,
+                task_requirements_satisfied=True,
+                sensitive_key=resolved_key
+            )
+
+        except Exception as e:
+            execution.status = 'FAILED'
+            execution.error = sanitize_data(str(e), resolved_key)
+            execution.completed_at = timezone.now()
+            execution.save()
+            task.status = 'FAILED'
+            task.result = sanitize_data(f"Error during resumed execution: {str(e)}", resolved_key)
+            task.save()
+            ExecutionEvent.objects.create(
+                task=task, execution=execution,
+                event_type='EXECUTION_FAILED',
+                metadata=sanitize_data({'error': str(e)}, resolved_key)
+            )
+
+            # Generate failure walkthrough artifact
+            self._generate_walkthrough(
+                task=task,
+                execution=execution,
+                executed_actions=executed_actions if 'executed_actions' in locals() else [],
+                final_result=task.result,
+                is_real=is_real if 'is_real' in locals() else False,
+                provider_name=provider_name if 'provider_name' in locals() else 'unknown',
+                model_name=model_name if 'model_name' in locals() else 'unknown',
+                required_capabilities=None,
+                task_requirements_satisfied=False,
+                sensitive_key=resolved_key if 'resolved_key' in locals() else None
             )
 
         finally:
