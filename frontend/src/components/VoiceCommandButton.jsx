@@ -75,28 +75,30 @@ export default function VoiceCommandButton({
             <div style={styles.backdrop} onClick={() => setDropdownOpen(false)} />
             <div style={styles.dropdownMenu}>
               <div style={styles.dropdownHeader}>Select Voice Language</div>
-              {VOICE_LANGUAGES.map((lang) => {
-                const isSelected = lang.code === selectedLanguage;
-                return (
-                  <button
-                    key={lang.code}
-                    type="button"
-                    onClick={() => {
-                      onLanguageChange(lang.code);
-                      setDropdownOpen(false);
-                    }}
-                    style={{
-                      ...styles.dropdownItem,
-                      backgroundColor: isSelected ? 'var(--bg-hover)' : 'transparent',
-                      fontWeight: isSelected ? '600' : '400',
-                      color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    }}
-                  >
-                    <span>{lang.nativeLabel}</span>
-                    <span style={styles.dropdownSubText}>{lang.label}</span>
-                  </button>
-                );
-              })}
+              <div style={styles.dropdownList}>
+                {VOICE_LANGUAGES.map((lang) => {
+                  const isSelected = lang.code === selectedLanguage;
+                  return (
+                    <button
+                      key={lang.code}
+                      type="button"
+                      onClick={() => {
+                        onLanguageChange(lang.code);
+                        setDropdownOpen(false);
+                      }}
+                      style={{
+                        ...styles.dropdownItem,
+                        backgroundColor: isSelected ? 'var(--bg-hover)' : 'transparent',
+                        fontWeight: isSelected ? '600' : '400',
+                        color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      }}
+                    >
+                      <span>{lang.nativeLabel}</span>
+                      <span style={styles.dropdownSubText}>{lang.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </>
         )}
@@ -193,6 +195,10 @@ const styles = {
     color: 'var(--text-muted)',
     padding: '6px 12px 4px',
     letterSpacing: '0.5px',
+  },
+  dropdownList: {
+    maxHeight: '220px',
+    overflowY: 'auto',
   },
   dropdownItem: {
     width: '100%',

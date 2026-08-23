@@ -6,6 +6,7 @@ import Notes from './Notes.jsx';
 import SettingsTab from '../components/SettingsTab';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import VoiceCommandButton from '../components/VoiceCommandButton';
+import AudioResponsePlayer from '../components/AudioResponsePlayer';
 import { useVoiceRecognition } from '../hooks/useVoiceRecognition';
 import { workspaceServices } from '../services/workspaceServices';
 import { taskServices } from '../services/taskServices';
@@ -871,16 +872,24 @@ export default function Dashboard() {
                               />
                             </div>
                             <div style={styles.taskFormActions}>
-                              <VoiceCommandButton
-                                isListening={isVoiceListening}
-                                onStart={() => startVoiceListening(taskProblemStatement)}
-                                onStop={stopVoiceListening}
-                                selectedLanguage={voiceLanguage}
-                                onLanguageChange={setVoiceLanguage}
-                                error={voiceError}
-                                isSupported={isVoiceSupported}
-                                disabled={executingTaskId !== null}
-                              />
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <VoiceCommandButton
+                                  isListening={isVoiceListening}
+                                  onStart={() => startVoiceListening(taskProblemStatement)}
+                                  onStop={stopVoiceListening}
+                                  selectedLanguage={voiceLanguage}
+                                  onLanguageChange={setVoiceLanguage}
+                                  error={voiceError}
+                                  isSupported={isVoiceSupported}
+                                  disabled={executingTaskId !== null}
+                                />
+                                <AudioResponsePlayer
+                                  text={taskProblemStatement}
+                                  defaultLang={voiceLanguage}
+                                  compact={true}
+                                  label="Listen to Input"
+                                />
+                              </div>
                               <button
                                 type="submit"
                                 className="action-btn"
@@ -1029,14 +1038,20 @@ export default function Dashboard() {
                                 </div>
 
                                 {/* Final Output Result */}
-                                {selectedTask.result && (
-                                  <div style={styles.resultBoxRedesign}>
-                                    <h4 style={styles.resultHeader}>Result</h4>
-                                    <div style={{ padding: '16px' }}>
-                                      <MarkdownRenderer text={selectedTask.result} />
+                                {(() => {
+                                  const taskResult = selectedTask.result || activeExec?.result;
+                                  if (!taskResult) return null;
+
+                                  return (
+                                    <div style={styles.resultBoxRedesign}>
+                                      <h4 style={styles.resultHeader}>Result</h4>
+                                      <AudioResponsePlayer text={taskResult} defaultLang={voiceLanguage} />
+                                      <div style={{ padding: '16px' }}>
+                                        <MarkdownRenderer text={taskResult} />
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
+                                  );
+                                })()}
 
                                 {/* Tools Used */}
                                 {(() => {

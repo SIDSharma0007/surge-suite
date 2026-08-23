@@ -1,10 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 export const VOICE_LANGUAGES = [
-  { code: 'en-IN', label: 'English (India)', nativeLabel: 'English' },
-  { code: 'hi-IN', label: 'Hindi', nativeLabel: 'हिन्दी' },
-  { code: 'bn-IN', label: 'Bengali', nativeLabel: 'বাংলা' },
-  { code: 'or-IN', altCodes: ['ory-IN', 'or'], label: 'Odia (India)', nativeLabel: 'ଓଡ଼ିଆ' },
+  { code: 'en-IN', altCodes: ['en-US', 'en-GB'], label: 'English', nativeLabel: 'English' },
+  { code: 'hi-IN', altCodes: ['hi'], label: 'Hindi', nativeLabel: 'हिन्दी' },
+  { code: 'bn-IN', altCodes: ['bn-BD', 'bn'], label: 'Bengali', nativeLabel: 'বাংলা' },
+  { code: 'or-IN', altCodes: ['ory-IN', 'or'], label: 'Odia', nativeLabel: 'ଓଡ଼ିଆ' },
+  { code: 'ur-IN', altCodes: ['ur-PK', 'ur'], label: 'Urdu', nativeLabel: 'اردو' },
+  { code: 'ta-IN', altCodes: ['ta-LK', 'ta'], label: 'Tamil', nativeLabel: 'தமிழ்' },
+  { code: 'te-IN', altCodes: ['te'], label: 'Telugu', nativeLabel: 'తెలుగు' },
+  { code: 'as-IN', altCodes: ['as'], label: 'Assamese', nativeLabel: 'অসমীয়া' },
+  { code: 'zh-CN', altCodes: ['zh-TW', 'zh'], label: 'Chinese', nativeLabel: '中文' },
+  { code: 'ja-JP', altCodes: ['ja'], label: 'Japanese', nativeLabel: '日本語' },
+  { code: 'fr-FR', altCodes: ['fr-CA', 'fr'], label: 'French', nativeLabel: 'Français' },
+  { code: 'es-ES', altCodes: ['es-MX', 'es'], label: 'Spanish', nativeLabel: 'Español' },
+  { code: 'ru-RU', altCodes: ['ru'], label: 'Russian', nativeLabel: 'Русский' },
 ];
 
 export const useVoiceRecognition = ({ onResult, defaultLang = 'en-IN' } = {}) => {
@@ -92,7 +101,7 @@ export const useVoiceRecognition = ({ onResult, defaultLang = 'en-IN' } = {}) =>
           setError('Network error occurred during speech recognition. Check internet connectivity.');
           isListeningRef.current = false;
         } else if (event.error === 'language-not-supported') {
-          // Try alternative BCP-47 tag for Odia (e.g. ory-IN or or)
+          // Try alternative BCP-47 tags
           const currentLangObj = VOICE_LANGUAGES.find(
             (l) => l.code === language || (l.altCodes && l.altCodes.includes(language))
           );
@@ -104,7 +113,7 @@ export const useVoiceRecognition = ({ onResult, defaultLang = 'en-IN' } = {}) =>
             setLanguage(nextTag);
             return;
           } else {
-            setError(`Odia acoustic engine is unavailable in your browser build. You can speak in Hindi or English, or type in Odia.`);
+            setError(`Voice recognition for ${currentLangObj?.label || language} is unavailable in your browser. You can speak in English or type directly.`);
             isListeningRef.current = false;
           }
         } else if (event.error !== 'aborted') {
