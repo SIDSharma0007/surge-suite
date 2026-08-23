@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
 import Notes from './Notes.jsx';
 import SettingsTab from '../components/SettingsTab';
+import DMAgentTab from '../components/DMAgentTab';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import { workspaceServices } from '../services/workspaceServices';
 import { taskServices } from '../services/taskServices';
@@ -24,7 +25,8 @@ import {
   Database,
   AlertCircle,
   Archive,
-  ClipboardList
+  ClipboardList,
+  MessageSquare
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -469,6 +471,7 @@ export default function Dashboard() {
             { name: 'Spreadsheets', icon: Table },
             { name: 'Notes', icon: FileText },
             { name: 'Tasks', icon: ClipboardList },
+            { name: 'DM Agent', icon: MessageSquare },
             { name: 'Shared Files', icon: FolderOpen },
             { name: 'Settings', icon: Settings }
           ].map((item) => {
@@ -1147,6 +1150,8 @@ export default function Dashboard() {
             </div>
           ) : activeTab === 'Settings' ? (
             <SettingsTab activeWorkspaceId={activeWorkspaceId} onWorkspaceUpdated={fetchWorkspaces} />
+          ) : activeTab === 'DM Agent' ? (
+            <DMAgentTab activeWorkspaceId={activeWorkspaceId} workspaces={workspaces} />
           ) : (
             <div style={styles.emptyTabPanel}>
               <FolderPlus size={36} strokeWidth={1.25} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />

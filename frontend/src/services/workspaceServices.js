@@ -100,5 +100,12 @@ export const workspaceServices = {
    */
   updateSettings(id, data) {
     return api.patch(`/workspaces/${id}/settings/`, data);
+  },
+
+  /**
+   * Send a direct message to the agent inside the workspace.
+   */
+  dm(id, data) {
+    return api.post(`/workspaces/${id}/dm/`, data);
   }
 };
