@@ -5,6 +5,33 @@ from django.conf import settings
 from django.db import connection
 from django.core.exceptions import PermissionDenied
 
+
+class ApprovalRequiredException(Exception):
+    """
+    Raised when bash.execute receives a command that requires human approval
+    before it may be executed (REQUIRES_APPROVAL tier).
+    The command is safe enough to be considered for execution but sensitive
+    enough that a human must explicitly authorize it.
+    """
+    def __init__(self, command: str, reason: str, risk: str = "MEDIUM"):
+        self.command = command
+        self.reason = reason
+        self.risk = risk
+        self.sanitized_display_command = self._sanitize(command)
+        super().__init__(f"Command requires human approval: {command}")
+
+    def _sanitize(self, cmd: str) -> str:
+        cmd = re.sub(r'(?i)(bearer\s+)[a-zA-Z0-9_\-\.]+', r'\1••••••••', cmd)
+        cmd = re.sub(r'(?i)(x-goog-api-key\s*:\s*)[a-zA-Z0-9_\-\.]+', r'\1••••••••', cmd)
+        cmd = re.sub(
+            r'(?i)(key|secret|password|token|auth|credential)([^a-zA-Z0-9])([a-zA-Z0-9_\-\.]+)',
+            r'\1\2••••••••',
+            cmd
+        )
+        cmd = re.sub(r'(?i)(sk-[a-zA-Z0-9]{12,})', '••••••••', cmd)
+        return cmd
+
+
 class CapabilityRegistry:
     def __init__(self):
         self.capabilities = {}
@@ -36,6 +63,9 @@ class CapabilityRegistry:
         try:
             handler = self.capabilities[name]["handler"]
             return handler(arguments)
+        except ApprovalRequiredException:
+            # Re-raise security exceptions so the caller can handle them
+            raise
         except Exception as e:
             return {"error": str(e)}
 
@@ -58,7 +88,11 @@ class CapabilityRegistry:
         # 2. bash.execute (FALLBACK)
         self.register_tool(
             name="bash.execute",
-            description="Execute a shell command inside the project directory. Use ONLY as a fallback when no suitable MCP capability exists.",
+            description=(
+                "Execute a shell command inside the project directory. "
+                "Use ONLY as a fallback when no suitable MCP capability exists. "
+                "Some commands require human approval before execution."
+            ),
             schema={
                 "type": "object",
                 "properties": {
@@ -69,6 +103,123 @@ class CapabilityRegistry:
             handler=self.handle_bash_execute,
             tool_type="fallback"
         )
+
+    # ------------------------------------------------------------------
+    # Security classification
+    # ------------------------------------------------------------------
+
+    # Commands approved for automatic execution without human review.
+    _SAFE_EXECUTABLES = frozenset({"echo", "ls", "git", "npm", "pwd", "whoami", "date"})
+
+    # Commands that are useful but require explicit human authorization.
+    # Only these exact executables qualify for REQUIRES_APPROVAL.
+    _APPROVAL_EXECUTABLES = frozenset({"find", "grep", "cat", "head", "tail"})
+
+    # Forbidden shell characters that make ANY command BLOCKED regardless
+    # of executable name (prevents injection / subshell attacks).
+    _BLOCKED_CHARS = frozenset(["$", "(", ")", "`", "\n", ">", "<"])
+
+    # Terms that, when present anywhere in the command string, always
+    # result in BLOCKED.  Covers secrets, networking, destructive ops,
+    # and interpreter invocation.
+    _BLOCKED_TERMS = [
+        ".env", "settings.py", "shadow", "passwd", "ssh", "rsa", "fernet", "cryptography",
+        "rm", "rmdir", "sudo", "su", "chmod", "chown", "mv",
+        "curl", "wget", "nc", "netcat", "telnet", "scp", "ftp", "sftp", "nmap",
+        "python", "node", "perl", "ruby", "bash", "sh", "zsh",
+        "awk", "sed",
+    ]
+
+    def _classify_command(self, command: str) -> str:
+        """
+        Classify a shell command into exactly one of three security tiers.
+
+        Returns: "SAFE" | "REQUIRES_APPROVAL" | "BLOCKED"
+
+        Conservative: when in doubt, BLOCKED.
+        """
+        command_clean = command.strip()
+        command_lower = command_clean.lower()
+
+        # 1. Reject forbidden shell metacharacters
+        for fc in self._BLOCKED_CHARS:
+            if fc in command_clean:
+                return "BLOCKED"
+
+        # 2. Reject globally-blocked terms
+        for term in self._BLOCKED_TERMS:
+            if term in command_lower:
+                return "BLOCKED"
+
+        # 3. Split into sub-commands (pipes, semicolons, ampersands)
+        subparts = []
+        for part in re.split(r'[|&;]', command_clean):
+            part = part.strip()
+            if part:
+                subparts.append(part)
+
+        if not subparts:
+            return "BLOCKED"
+
+        # 4. Classify each sub-command executable
+        #    Any BLOCKED part → whole pipeline BLOCKED
+        #    Any REQUIRES_APPROVAL part → at least REQUIRES_APPROVAL
+        highest_tier = "SAFE"
+        for part in subparts:
+            tokens = part.split()
+            if not tokens:
+                return "BLOCKED"
+            exec_name = tokens[0].lower()
+
+            if exec_name in self._SAFE_EXECUTABLES:
+                pass  # remains SAFE or inherits higher tier from another part
+            elif exec_name in self._APPROVAL_EXECUTABLES:
+                highest_tier = "REQUIRES_APPROVAL"
+            else:
+                # Unknown executable → BLOCKED immediately
+                return "BLOCKED"
+
+        return highest_tier
+
+    def _build_approval_reason(self, command: str) -> tuple[str, str]:
+        """
+        Build a human-readable reason and risk level for an approval request.
+
+        Returns: (reason, risk_level)
+        """
+        tokens = command.strip().split()
+        exec_name = tokens[0].lower() if tokens else ""
+
+        reasons = {
+            "find": (
+                "The agent wants to search the filesystem for files matching specific criteria.",
+                "MEDIUM"
+            ),
+            "grep": (
+                "The agent wants to search file contents for a text pattern.",
+                "MEDIUM"
+            ),
+            "cat": (
+                "The agent wants to display the contents of a file.",
+                "MEDIUM"
+            ),
+            "head": (
+                "The agent wants to view the first lines of a file.",
+                "LOW"
+            ),
+            "tail": (
+                "The agent wants to view the last lines of a file.",
+                "LOW"
+            ),
+        }
+
+        if exec_name in reasons:
+            return reasons[exec_name]
+        return ("The agent requests execution of a shell command.", "MEDIUM")
+
+    # ------------------------------------------------------------------
+    # Tool handlers
+    # ------------------------------------------------------------------
 
     def handle_database_query(self, args: dict) -> dict:
         sql = args.get("sql", "").strip()
@@ -100,47 +251,32 @@ class CapabilityRegistry:
         except Exception as e:
             return {"error": str(e)}
 
-    def handle_bash_execute(self, args: dict) -> dict:
-        # Strict security validation
-        command_clean = args.get("command", "").strip()
-        command_lower = command_clean.lower()
-        
-        # Block subshell, backticks, redirection, and nested commands
-        forbidden_chars = ["$", "(", ")", "`", "'", "\"", "\n", ">", "<"]
-        for fc in forbidden_chars:
-            if fc in command_clean:
-                raise PermissionDenied(f"Access denied: Nested commands, redirection, or quotes '{fc}' are blocked for security.")
-                
-        # Split command by standard separators: | , & , ;
-        subparts = []
-        for part in re.split(r'[|&;]', command_clean):
-            part = part.strip()
-            if part:
-                subparts.append(part)
-                
-        ALLOWED_EXECUTABLES = {"echo", "ls", "git", "npm"}
-        
-        for part in subparts:
-            tokens = part.split()
-            if not tokens:
-                continue
-            exec_name = tokens[0].lower()
-            if exec_name not in ALLOWED_EXECUTABLES:
-                raise PermissionDenied(f"Access denied: Command '{exec_name}' is not in the safe allowlist.")
-                
-        # Blocked terms scanning (case-insensitive) for any secrets, SSH files, env, credentials
-        blocked_terms = [
-            ".env", "settings.py", "secret", "key", "token", "credential", 
-            "password", "shadow", "passwd", "ssh", "rsa", "fernet", "cryptography",
-            "cat", "head", "tail", "less", "more", "grep", "find", "awk", "sed",
-            "curl", "wget", "nc", "netcat", "telnet", "scp", "ftp", "sftp", "nmap",
-            "python", "node", "perl", "ruby", "bash", "sh", "zsh"
-        ]
-        for term in blocked_terms:
-            if term in command_lower:
-                raise PermissionDenied(f"Access denied: Accessing or dumping '{term}' is blocked for security.")
+    def handle_bash_execute(self, args: dict, task=None, execution=None, approved=False, **kwargs) -> dict:
+        """
+        Execute a shell command using the three-tier security policy:
 
-        # Environmental security: strip secrets before executing
+        SAFE              → execute automatically
+        REQUIRES_APPROVAL → raise ApprovalRequiredException (caller must pause)
+        BLOCKED           → raise PermissionDenied (permanently rejected)
+        """
+        command_clean = args.get("command", "").strip()
+
+        tier = self._classify_command(command_clean)
+
+        if tier == "BLOCKED":
+            raise PermissionDenied(
+                "Access denied: The requested command is blocked by the security policy."
+            )
+
+        if tier == "REQUIRES_APPROVAL" and not approved:
+            reason, risk = self._build_approval_reason(command_clean)
+            raise ApprovalRequiredException(
+                command=command_clean,
+                reason=reason,
+                risk=risk
+            )
+
+        # SAFE — execute with hardened environment
         clean_env = os.environ.copy()
         keys_to_clear = [
             'SECRET_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'NVIDIA_API_KEY',
@@ -149,11 +285,9 @@ class CapabilityRegistry:
         for key in keys_to_clear:
             clean_env.pop(key, None)
 
-        # Base workspace root path traversal check
         base_dir = os.path.abspath(settings.BASE_DIR)
-        
+
         try:
-            # Run command with 15 second timeout and restricted environment
             result = subprocess.run(
                 command_clean,
                 shell=True,
@@ -163,7 +297,6 @@ class CapabilityRegistry:
                 text=True,
                 timeout=15
             )
-            # Enforce output size limits (first 10KB)
             stdout = result.stdout[:10240]
             stderr = result.stderr[:10240]
             return {

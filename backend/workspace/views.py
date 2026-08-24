@@ -96,7 +96,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         # Determine permission based on action
-        if self.action in ['retrieve', 'workspace_settings']:
+        if self.action in ['retrieve', 'workspace_settings', 'dm']:
             return [IsAuthenticatedOr401(), IsWorkspaceMember()]
         elif self.action in ['update', 'partial_update', 'destroy', 'archive', 'restore', 'list_members', 'add_member', 'remove_member']:
             return [IsAuthenticatedOr401(), IsWorkspaceOwner()]
@@ -269,4 +269,131 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         return Response({
             "ai_provider": workspace.ai_provider,
             "ai_model": workspace.ai_model
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='dm', url_name='dm', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])
+    def dm(self, request, pk=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+
+        if workspace.is_archived:
+            return Response(
+                {"error": "Cannot access an archived workspace."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        message = request.data.get("message")
+        history = request.data.get("history", [])
+
+        # Validate message
+        if not message or not isinstance(message, str):
+            return Response(
+                {"error": "Message is required and must be a string."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if len(message) > 5000:
+            return Response(
+                {"error": "Message exceeds the maximum limit of 5000 characters."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate history
+        if not isinstance(history, list):
+            return Response(
+                {"error": "History must be a list of conversation turns."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if len(history) > 10:
+            return Response(
+                {"error": "History exceeds the maximum limit of 10 turns."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        for turn in history:
+            if not isinstance(turn, dict):
+                return Response(
+                    {"error": "Each history turn must be an object."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            role = turn.get("role")
+            content = turn.get("content")
+            if role not in ["user", "assistant"]:
+                return Response(
+                    {"error": f"Invalid role: '{role}'. Only 'user' and 'assistant' roles are allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if not isinstance(content, str):
+                return Response(
+                    {"error": "History content must be plain strings."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Ensure no nested objects/arrays in the turn dict, only "role" and "content" fields
+            if set(turn.keys()) - {"role", "content"}:
+                return Response(
+                    {"error": "History turns can only contain 'role' and 'content' fields."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        provider_name = workspace.ai_provider or "simulated"
+        model_name = workspace.ai_model or "dev-mock"
+
+        # Resolve provider
+        from task.services.model_provider import get_model_provider_by_name
+        try:
+            model_provider, is_real = get_model_provider_by_name(provider_name)
+        except ValueError as err:
+            return Response(
+                {"error": f"Unsupported provider: '{provider_name}'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Resolve API credentials for real providers
+        resolved_key = None
+        if is_real:
+            from task.models import UserProviderCredential
+            from task.utils.encryption import decrypt_value
+            try:
+                cred = UserProviderCredential.objects.get(user=request.user, provider=provider_name.lower())
+                resolved_key = decrypt_value(cred.encrypted_api_key)
+            except UserProviderCredential.DoesNotExist:
+                pass
+
+            if not resolved_key:
+                return Response(
+                    {"error": "Configure this provider under Settings → AI Providers."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Construct prompt
+        prompt_parts = []
+        for turn in history:
+            role_label = "User" if turn["role"] == "user" else "Assistant"
+            prompt_parts.append(f"{role_label}: {turn['content']}")
+        prompt_parts.append(f"User: {message}")
+        prompt = "\n".join(prompt_parts)
+
+        # Generate response
+        try:
+            output, mode = model_provider.generate(
+                prompt,
+                api_key=resolved_key,
+                model=model_name
+            )
+        except Exception as e:
+            return Response(
+                {"error": "Unable to reach the selected AI provider. Check your provider configuration."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if output.startswith("Error:"):
+            return Response(
+                {"error": "Unable to reach the selected AI provider. Check your provider configuration."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response({
+            "message": output,
+            "provider": provider_name,
+            "model": model_name,
+            "mode": mode
         }, status=status.HTTP_200_OK)

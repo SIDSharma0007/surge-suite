@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 from workspace.models import Workspace
 
 class Agent(models.Model):
@@ -33,6 +34,7 @@ class Task(models.Model):
         choices=[
             ('PENDING', 'Pending'),
             ('RUNNING', 'Running'),
+            ('WAITING_FOR_APPROVAL', 'Waiting for Approval'),
             ('COMPLETED', 'Completed'),
             ('FAILED', 'Failed')
         ],
@@ -54,6 +56,7 @@ class TaskExecution(models.Model):
         choices=[
             ('PENDING', 'Pending'),
             ('RUNNING', 'Running'),
+            ('WAITING_FOR_APPROVAL', 'Waiting for Approval'),
             ('COMPLETED', 'Completed'),
             ('FAILED', 'Failed')
         ],
@@ -121,3 +124,83 @@ class UserProviderCredential(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.provider}"
+
+
+class HumanApprovalRequest(models.Model):
+    """
+    Represents a request for human authorization before executing a shell command
+    that falls under the REQUIRES_APPROVAL security tier.
+
+    Approval is strictly scoped: command, task, execution, and workspace are
+    all captured at creation time and re-verified before any execution.
+    """
+    APPROVAL_STATUSES = [
+        ('PENDING', 'Pending'),
+        ('APPROVED', 'Approved'),
+        ('DENIED', 'Denied'),
+        ('EXPIRED', 'Expired'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+    RISK_LEVELS = [
+        ('LOW', 'Low'),
+        ('MEDIUM', 'Medium'),
+        ('HIGH', 'High'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Relationships — all required for cross-validation
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='approval_requests')
+    execution = models.ForeignKey(TaskExecution, on_delete=models.CASCADE, related_name='approval_requests')
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='approval_requests')
+    requested_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='submitted_approvals'
+    )
+    action = models.ForeignKey(
+        Action, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='approval_requests'
+    )
+
+    # Command storage — immutable after creation
+    command = models.TextField()                    # exact, raw command (never shown to frontend)
+    sanitized_display_command = models.TextField()  # secrets-redacted display version
+
+    # Human-readable context
+    reason = models.TextField(blank=True)  # why the agent wants to run this
+    risk = models.CharField(max_length=20, choices=RISK_LEVELS, default='MEDIUM')
+
+    # Lifecycle
+    status = models.CharField(max_length=30, choices=APPROVAL_STATUSES, default='PENDING')
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='resolved_approvals'
+    )
+
+    # Execution result (populated after approved execution)
+    execution_result = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['task', 'status']),
+            models.Index(fields=['execution', 'status']),
+        ]
+        # Prevent more than one PENDING approval per execution at a time
+        constraints = [
+            models.UniqueConstraint(
+                fields=['execution'],
+                condition=models.Q(status='PENDING'),
+                name='unique_pending_approval_per_execution'
+            )
+        ]
+
+    def is_expired(self):
+        if self.expires_at and timezone.now() > self.expires_at:
+            return True
+        return False
+
+    def __str__(self):
+        return f"ApprovalRequest {self.id} [{self.status}] - {self.sanitized_display_command[:60]}"
