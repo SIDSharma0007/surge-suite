@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Play, Pause, Square, Volume2, Globe } from 'lucide-react';
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import { VOICE_LANGUAGES } from '../hooks/useVoiceRecognition';
@@ -12,6 +12,12 @@ export default function AudioResponsePlayer({
   const { speak, pause, resume, cancel, isSpeaking, isPaused, isSupported } = useSpeechSynthesis();
   const [selectedLang, setSelectedLang] = useState(defaultLang);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    if (defaultLang) {
+      setSelectedLang(defaultLang);
+    }
+  }, [defaultLang]);
 
   if (!isSupported) {
     return null;

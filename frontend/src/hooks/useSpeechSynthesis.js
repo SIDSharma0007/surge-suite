@@ -32,6 +32,30 @@ export const cleanMarkdownForSpeech = (markdownText) => {
     .trim();
 };
 
+/**
+ * Automatically detects the script of the text to select the best language code
+ */
+export const detectScriptLanguage = (text) => {
+  if (!text || typeof text !== 'string') return null;
+
+  if (/[\u0980-\u09FF]/.test(text)) {
+    if (/[\u09F0\u09F1]/.test(text) || (text.includes('ৰ') || text.includes('ৱ'))) {
+      return 'as-IN';
+    }
+    return 'bn-IN';
+  }
+  if (/[\u0900-\u097F]/.test(text)) return 'hi-IN';
+  if (/[\u0B00-\u0B7F]/.test(text)) return 'or-IN';
+  if (/[\u0B80-\u0BFF]/.test(text)) return 'ta-IN';
+  if (/[\u0C00-\u0C7F]/.test(text)) return 'te-IN';
+  if (/[\u0600-\u06FF\u0750-\u077F]/.test(text)) return 'ur-IN';
+  if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text)) return 'ja-JP';
+  if (/[\u4E00-\u9FFF]/.test(text)) return 'zh-CN';
+  if (/[\u0400-\u04FF]/.test(text)) return 'ru-RU';
+
+  return null;
+};
+
 export const useSpeechSynthesis = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -52,7 +76,9 @@ export const useSpeechSynthesis = () => {
     const updateVoices = () => {
       try {
         const availableVoices = window.speechSynthesis.getVoices();
-        setVoices(availableVoices);
+        if (availableVoices && availableVoices.length > 0) {
+          setVoices(availableVoices);
+        }
       } catch (err) {
         console.warn('Failed to load speech synthesis voices:', err);
       }
@@ -79,15 +105,26 @@ export const useSpeechSynthesis = () => {
     const primaryTag = cleanLang.split('-')[0];
 
     // 1. Exact match (e.g. "hi-IN", "bn-IN", "ta-IN", "zh-CN")
-    const exact = voices.find((v) => v.lang.toLowerCase() === cleanLang || v.lang.toLowerCase().replace('_', '-') === cleanLang);
+    const exact = voices.find(
+      (v) =>
+        v.lang.toLowerCase() === cleanLang ||
+        v.lang.toLowerCase().replace('_', '-') === cleanLang
+    );
     if (exact) return exact;
 
-    // 2. Primary language tag match (e.g. "hi", "bn", "zh")
-    const primaryMatch = voices.find((v) => v.lang.toLowerCase().startsWith(primaryTag));
+    // 2. Primary language tag match (e.g. "bn", "zh", "hi", "ta")
+    const primaryMatch = voices.find((v) =>
+      v.lang.toLowerCase().startsWith(primaryTag)
+    );
     if (primaryMatch) return primaryMatch;
 
-    // 3. Fallback to default voice or first available
-    return voices.find((v) => v.default) || voices[0];
+    // 3. Do NOT fallback to an English voice when a non-English language is requested
+    // Returning null allows the browser engine to use its internal language synthesizer
+    if (primaryTag !== 'en') {
+      return null;
+    }
+
+    return voices.find((v) => v.default) || voices[0] || null;
   }, [voices]);
 
   const speak = useCallback((text, langCode = 'en-US', options = {}) => {
@@ -95,20 +132,25 @@ export const useSpeechSynthesis = () => {
       return;
     }
 
-    // Cancel any ongoing utterance before speaking new text
+    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
 
-    const spokenText = options.stripMarkdown !== false ? cleanMarkdownForSpeech(text) : text;
-    if (!spokenText) return;
+    const spokenText =
+      options.stripMarkdown !== false ? cleanMarkdownForSpeech(text) : text;
+    if (!spokenText || !spokenText.trim()) return;
+
+    // Auto-detect language if text has distinct non-Latin script and langCode is default/English
+    const detectedLang = detectScriptLanguage(spokenText);
+    const effectiveLang = (langCode === 'en-US' || langCode === 'en-IN') && detectedLang ? detectedLang : langCode;
 
     try {
       const utterance = new SpeechSynthesisUtterance(spokenText);
-      utterance.lang = langCode;
+      utterance.lang = effectiveLang;
       utterance.rate = options.rate || 1.0;
       utterance.pitch = options.pitch || 1.0;
       utterance.volume = options.volume || 1.0;
 
-      const voice = findBestVoice(langCode);
+      const voice = findBestVoice(effectiveLang);
       if (voice) {
         utterance.voice = voice;
       }
@@ -126,7 +168,7 @@ export const useSpeechSynthesis = () => {
       };
 
       utterance.onerror = (event) => {
-        console.warn('[SpeechSynthesis Error]', event.error);
+        console.warn('[SpeechSynthesis Error]', event.error, 'for lang:', effectiveLang);
         setIsSpeaking(false);
         setIsPaused(false);
         setCurrentText('');
@@ -141,7 +183,16 @@ export const useSpeechSynthesis = () => {
       };
 
       utteranceRef.current = utterance;
-      window.speechSynthesis.speak(utterance);
+      
+      // Slight delay to avoid browser cancel-speak race condition
+      setTimeout(() => {
+        try {
+          window.speechSynthesis.speak(utterance);
+        } catch (e) {
+          console.warn('[SpeechSynthesis speak error]', e);
+          setIsSpeaking(false);
+        }
+      }, 50);
     } catch (err) {
       console.error('Speech synthesis invocation failed:', err);
       setIsSpeaking(false);
