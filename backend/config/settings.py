@@ -93,9 +93,17 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 import urllib.parse
 
+USE_SQLITE = config("USE_SQLITE", default=True, cast=bool)
 DATABASE_URL = config("DATABASE_URL", default="")
 
-if DATABASE_URL:
+if USE_SQLITE:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
+elif DATABASE_URL:
     url = urllib.parse.urlparse(DATABASE_URL)
     DATABASES = {
         "default": {
@@ -155,6 +163,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "static/"
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

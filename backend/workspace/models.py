@@ -6,6 +6,7 @@ class Workspace(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_workspaces')
+    system_prompt = models.TextField(blank=True, default='')
     is_archived = models.BooleanField(default=False)
     ai_provider = models.CharField(max_length=100, default='simulated')
     ai_model = models.CharField(max_length=100, default='dev-mock')
@@ -31,3 +32,78 @@ class WorkspaceMembership(models.Model):
 
     def __str__(self):
         return f"{self.user.username} in {self.workspace.name} ({self.role})"
+
+class WorkspaceSkill(models.Model):
+    """
+    Behavioral instructions/rules for agents in the workspace.
+    Skills accept markdown files (.md) only and are strictly part of the instruction layer.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='skills')
+    name = models.CharField(max_length=255)
+    description = models.CharField(max_length=500, blank=True, default='')
+    content = models.TextField() # Markdown rules/instructions
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('workspace', 'name')
+        ordering = ['name']
+
+    def __str__(self):
+        return f"Skill {self.name} ({self.workspace.name})"
+
+class WorkspaceContextItem(models.Model):
+    """
+    Data and knowledge layer for the workspace.
+    Context items are DATA, never executable instructions.
+    Includes rich provenance, normalization state, and verification metadata.
+    """
+    CONTEXT_TYPES = [
+        ('USER_CONTEXT', 'User Context'),
+        ('REFERENCE', 'Reference Document'),
+        ('INSTITUTIONAL_REFERENCE', 'Institutional Reference'),
+    ]
+
+    SOURCE_TYPES = [
+        ('MANUAL_TEXT', 'Manual Text'),
+        ('FILE_UPLOAD', 'File Upload'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='context_items')
+    creator = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_context_items')
+    name = models.CharField(max_length=255)
+    context_type = models.CharField(max_length=50, choices=CONTEXT_TYPES, default='USER_CONTEXT')
+    source_type = models.CharField(max_length=50, choices=SOURCE_TYPES, default='MANUAL_TEXT')
+    
+    # Provenance and file metadata
+    raw_file = models.FileField(upload_to='workspace_context/', null=True, blank=True)
+    original_filename = models.CharField(max_length=255, blank=True, default='')
+    mime_type = models.CharField(max_length=100, blank=True, default='text/plain')
+    content_hash = models.CharField(max_length=64, blank=True, default='')
+    file_size = models.BigIntegerField(default=0)
+
+    # Normalized text content for safe delivery to agent
+    normalized_content = models.TextField(blank=True, default='')
+
+    # Lifecycle & status
+    is_active = models.BooleanField(default=True)
+    is_archived = models.BooleanField(default=False)
+
+    # Extended provenance & verification
+    metadata = models.JSONField(default=dict, blank=True)
+    verification_metadata = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['workspace', 'is_active', 'is_archived']),
+            models.Index(fields=['workspace', 'context_type']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} [{self.context_type}] ({self.workspace.name})"

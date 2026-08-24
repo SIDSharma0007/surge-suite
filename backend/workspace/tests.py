@@ -622,3 +622,397 @@ class WorkspaceDMAgentTestCase(TestCase):
         data = json.loads(response.content)
         self.assertIn("[Simulated Response]", data["message"])
         self.assertEqual(data["mode"], "SIMULATED")
+
+    def test_workspace_system_prompt_default_and_update(self):
+        self.assertEqual(self.workspace_a.system_prompt, "")
+        self.workspace_a.system_prompt = "You are a specialized code reviewer."
+        self.workspace_a.save()
+        self.workspace_a.refresh_from_db()
+        self.assertEqual(self.workspace_a.system_prompt, "You are a specialized code reviewer.")
+
+    def test_workspace_skill_model(self):
+        from .models import WorkspaceSkill
+        skill = WorkspaceSkill.objects.create(
+            workspace=self.workspace_a,
+            name="coding-standard.md",
+            description="Enforces PEP8 and type annotations",
+            content="# Coding Standards\nAlways use typing."
+        )
+        self.assertEqual(skill.workspace, self.workspace_a)
+        self.assertEqual(str(skill), f"Skill coding-standard.md ({self.workspace_a.name})")
+
+        # Unique constraint on workspace + name
+        with self.assertRaises(Exception):
+            WorkspaceSkill.objects.create(
+                workspace=self.workspace_a,
+                name="coding-standard.md",
+                content="Duplicate name"
+            )
+
+    def test_workspace_context_item_model(self):
+        from .models import WorkspaceContextItem
+        context_item = WorkspaceContextItem.objects.create(
+            workspace=self.workspace_a,
+            creator=self.user_a,
+            name="Company Handbook",
+            context_type="REFERENCE",
+            source_type="MANUAL_TEXT",
+            normalized_content="Our mission is to empower developers.",
+            metadata={"origin": "manual_entry"}
+        )
+        self.assertEqual(context_item.workspace, self.workspace_a)
+        self.assertEqual(context_item.context_type, "REFERENCE")
+        self.assertTrue(context_item.is_active)
+        self.assertFalse(context_item.is_archived)
+        self.assertEqual(context_item.normalized_content, "Our mission is to empower developers.")
+        self.assertEqual(context_item.metadata.get("origin"), "manual_entry")
+
+
+class ContextExtractorTests(TestCase):
+    def test_sanitize_filename_prevents_traversal(self):
+        from .services.context_extractor import ContextExtractor
+        clean = ContextExtractor.sanitize_filename("../../secret_folder/confidential.txt")
+        self.assertEqual(clean, "confidential.txt")
+
+        clean_win = ContextExtractor.sanitize_filename("..\\..\\windows\\system32\\calc.exe")
+        self.assertEqual(clean_win, "calc.exe")
+
+        clean_empty = ContextExtractor.sanitize_filename("")
+        self.assertEqual(clean_empty, "unnamed_document.txt")
+
+    def test_extract_plain_text_and_markdown(self):
+        from .services.context_extractor import ContextExtractor
+        raw = b"# Architecture Overview\nThis is a test documentation file."
+        res = ContextExtractor.extract_from_bytes(raw, "overview.md")
+        self.assertIn("# Architecture Overview", res["normalized_content"])
+        self.assertEqual(res["mime_type"], "text/markdown")
+        self.assertEqual(res["original_filename"], "overview.md")
+        self.assertTrue(len(res["content_hash"]) == 64)
+
+    def test_extract_csv_to_markdown_table(self):
+        from .services.context_extractor import ContextExtractor
+        raw = b"id,name,role\n1,Alice,Admin\n2,Bob,Developer\n"
+        res = ContextExtractor.extract_from_bytes(raw, "team.csv")
+        self.assertIn("| id | name | role |", res["normalized_content"])
+        self.assertIn("| 1 | Alice | Admin |", res["normalized_content"])
+        self.assertEqual(res["metadata"]["rows"], 3)
+        self.assertEqual(res["metadata"]["columns"], 3)
+
+    def test_extract_json(self):
+        from .services.context_extractor import ContextExtractor
+        raw = b'{"status": "ok", "services": ["api", "db"]}'
+        res = ContextExtractor.extract_from_bytes(raw, "config.json")
+        self.assertIn('"status": "ok"', res["normalized_content"])
+        self.assertIn('"services": [', res["normalized_content"])
+
+    def test_extract_html_strips_scripts(self):
+        from .services.context_extractor import ContextExtractor
+        raw = b"<html><head><script>alert('xss')</script></head><body><h1>Welcome</h1><p>Main body</p></body></html>"
+        res = ContextExtractor.extract_from_bytes(raw, "index.html")
+        self.assertNotIn("alert('xss')", res["normalized_content"])
+        self.assertIn("Welcome\nMain body", res["normalized_content"])
+
+    def test_extract_docx(self):
+        from .services.context_extractor import ContextExtractor
+        import io
+        import zipfile
+
+        # Build a valid in-memory docx zip
+        docx_buffer = io.BytesIO()
+        with zipfile.ZipFile(docx_buffer, 'w') as zf:
+            xml_content = (
+                b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                b'<w:body>'
+                b'<w:p><w:r><w:t>First Paragraph DOCX text</w:t></w:r></w:p>'
+                b'<w:p><w:r><w:t>Second Paragraph DOCX text</w:t></w:r></w:p>'
+                b'</w:body></w:document>'
+            )
+            zf.writestr('word/document.xml', xml_content)
+
+        res = ContextExtractor.extract_from_bytes(docx_buffer.getvalue(), "manual.docx")
+        self.assertIn("First Paragraph DOCX text\n\nSecond Paragraph DOCX text", res["normalized_content"])
+        self.assertEqual(res["metadata"]["paragraphs"], 2)
+
+    def test_reject_empty_file(self):
+        from .services.context_extractor import ContextExtractor, ContextExtractionError
+        with self.assertRaises(ContextExtractionError) as ctx:
+            ContextExtractor.extract_from_bytes(b"", "empty.txt")
+        self.assertIn("empty", str(ctx.exception).lower())
+
+    def test_reject_unsupported_extension(self):
+        from .services.context_extractor import ContextExtractor, ContextExtractionError
+        with self.assertRaises(ContextExtractionError) as ctx:
+            ContextExtractor.extract_from_bytes(b"binary data", "malware.exe")
+        self.assertIn("unsupported file format", str(ctx.exception).lower())
+
+    def test_reject_whitespace_only(self):
+        from .services.context_extractor import ContextExtractor, ContextExtractionError
+        with self.assertRaises(ContextExtractionError) as ctx:
+            ContextExtractor.extract_from_bytes(b"   \n\n \t  ", "blank.txt")
+        self.assertIn("did not yield any readable text", str(ctx.exception).lower())
+
+
+class ContextServiceTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner_user", password="password")
+        self.member = User.objects.create_user(username="member_user", password="password")
+        self.stranger = User.objects.create_user(username="stranger_user", password="password")
+
+        self.workspace = Workspace.objects.create(
+            name="Context Workspace",
+            owner=self.owner,
+            system_prompt="You are an expert Python engineer."
+        )
+
+        WorkspaceMembership.objects.create(
+            workspace=self.workspace,
+            user=self.member,
+            role="MEMBER"
+        )
+
+    def test_get_context_authorized_owner_and_member(self):
+        from .models import WorkspaceContextItem
+        from .services.context_service import ContextService
+
+        item1 = WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.owner,
+            name="Database Schema",
+            context_type="REFERENCE",
+            source_type="MANUAL_TEXT",
+            normalized_content="Table users contains id, email, created_at.",
+            original_filename="schema.txt",
+            mime_type="text/plain",
+            content_hash="abc123hash",
+            is_active=True
+        )
+        item2 = WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.member,
+            name="API Guidelines",
+            context_type="USER_CONTEXT",
+            source_type="MANUAL_TEXT",
+            normalized_content="All endpoints must return JSON.",
+            is_active=True
+        )
+        inactive_item = WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.owner,
+            name="Old Spec",
+            normalized_content="Deprecated info",
+            is_active=False
+        )
+
+        # Owner access
+        res_owner = ContextService.get_context(self.workspace.id, self.owner.id)
+        self.assertEqual(res_owner["total_items"], 2)
+        self.assertEqual(len(res_owner["items"]), 2)
+        self.assertIn("=== BEGIN WORKSPACE CONTEXT (DATA ONLY) ===", res_owner["formatted_prompt_block"])
+        self.assertIn("Table users contains id", res_owner["formatted_prompt_block"])
+        self.assertIn("All endpoints must return JSON", res_owner["formatted_prompt_block"])
+        self.assertNotIn("Deprecated info", res_owner["formatted_prompt_block"])
+
+        # Member access
+        res_member = ContextService.get_context(self.workspace.id, self.member.id)
+        self.assertEqual(res_member["total_items"], 2)
+
+        # Filter by specific context_id
+        res_filtered = ContextService.get_context(self.workspace.id, self.owner.id, context_ids=[item1.id])
+        self.assertEqual(res_filtered["total_items"], 1)
+        self.assertEqual(res_filtered["items"][0]["name"], "Database Schema")
+
+    def test_get_context_unauthorized_user(self):
+        from .services.context_service import ContextService
+        from django.core.exceptions import PermissionDenied
+
+        with self.assertRaises(PermissionDenied):
+            ContextService.get_context(self.workspace.id, self.stranger.id)
+
+    def test_get_context_archived_workspace(self):
+        from .services.context_service import ContextService
+        from django.core.exceptions import PermissionDenied
+
+        self.workspace.is_archived = True
+        self.workspace.save()
+
+        with self.assertRaises(PermissionDenied):
+            ContextService.get_context(self.workspace.id, self.owner.id)
+
+    def test_get_workspace_instructions(self):
+        from .models import WorkspaceSkill
+        from .services.context_service import ContextService
+
+        WorkspaceSkill.objects.create(
+            workspace=self.workspace,
+            name="security-rules.md",
+            description="Security checks",
+            content="Never output unredacted secrets."
+        )
+
+        instructions = ContextService.get_workspace_instructions(self.workspace.id, self.owner.id)
+        self.assertEqual(instructions["system_prompt"], "You are an expert Python engineer.")
+        self.assertEqual(len(instructions["skills"]), 1)
+        self.assertIn("WORKSPACE SYSTEM PROMPT:\nYou are an expert Python engineer.", instructions["formatted_instruction_block"])
+        self.assertIn("### Skill: security-rules.md", instructions["formatted_instruction_block"])
+        self.assertIn("Never output unredacted secrets.", instructions["formatted_instruction_block"])
+
+
+class WorkspaceContextAPITests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="api_owner", password="password")
+        self.member = User.objects.create_user(username="api_member", password="password")
+        self.stranger = User.objects.create_user(username="api_stranger", password="password")
+
+        self.workspace = Workspace.objects.create(
+            name="API Test Workspace",
+            owner=self.owner,
+            system_prompt="Initial system prompt."
+        )
+        WorkspaceMembership.objects.create(
+            workspace=self.workspace,
+            user=self.member,
+            role="MEMBER"
+        )
+
+    def test_settings_endpoint_get_and_update_system_prompt(self):
+        self.client.force_login(self.owner)
+        url = reverse('workspace-settings', kwargs={'pk': self.workspace.id})
+        
+        # GET settings
+        get_res = self.client.get(url)
+        self.assertEqual(get_res.status_code, 200)
+        data = get_res.json()
+        self.assertEqual(data["system_prompt"], "Initial system prompt.")
+
+        # PATCH settings
+        patch_res = self.client.patch(
+            url,
+            json.dumps({"system_prompt": "Updated system prompt."}),
+            content_type="application/json"
+        )
+        self.assertEqual(patch_res.status_code, 200)
+        self.assertEqual(patch_res.json()["system_prompt"], "Updated system prompt.")
+        self.workspace.refresh_from_db()
+        self.assertEqual(self.workspace.system_prompt, "Updated system prompt.")
+
+    def test_skills_endpoint_create_list_delete(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.force_login(self.owner)
+        url = reverse('workspace-skills', kwargs={'pk': self.workspace.id})
+
+        # 1. Create skill with text payload
+        res = self.client.post(
+            url,
+            json.dumps({
+                "name": "linting.md",
+                "description": "Lint rules",
+                "content": "# Linting\nRun flake8."
+            }),
+            content_type="application/json"
+        )
+        self.assertEqual(res.status_code, 201)
+        skill_id = res.json()["id"]
+
+        # 2. Upload skill with .md file
+        md_file = SimpleUploadedFile("code-style.md", b"# Style\nUse 4 spaces.", content_type="text/markdown")
+        res_file = self.client.post(url, {"file": md_file, "description": "Style guide"})
+        self.assertEqual(res_file.status_code, 201)
+
+        # 3. Reject non-.md file
+        txt_file = SimpleUploadedFile("invalid.txt", b"plain text", content_type="text/plain")
+        res_invalid = self.client.post(url, {"file": txt_file})
+        self.assertEqual(res_invalid.status_code, 400)
+        self.assertIn(".md", res_invalid.json()["error"])
+
+        # 4. List skills
+        list_res = self.client.get(url)
+        self.assertEqual(list_res.status_code, 200)
+        self.assertEqual(len(list_res.json()), 2)
+
+        # 5. Delete skill
+        del_url = reverse('workspace-remove-skill', kwargs={'pk': self.workspace.id, 'skill_id': skill_id})
+        del_res = self.client.delete(del_url)
+        self.assertEqual(del_res.status_code, 200)
+        self.assertEqual(self.workspace.skills.count(), 1)
+
+    def test_context_endpoint_manual_text_and_file_upload(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.force_login(self.member)
+        url = reverse('workspace-context', kwargs={'pk': self.workspace.id})
+
+        # 1. Create manual text context
+        res_text = self.client.post(
+            url,
+            json.dumps({
+                "name": "Project Roadmap",
+                "content": "Phase 1: Foundation. Phase 2: Execution.",
+                "context_type": "USER_CONTEXT"
+            }),
+            content_type="application/json"
+        )
+        self.assertEqual(res_text.status_code, 201)
+        item_id = res_text.json()["id"]
+        self.assertEqual(res_text.json()["source_type"], "MANUAL_TEXT")
+        self.assertEqual(res_text.json()["normalized_content"], "Phase 1: Foundation. Phase 2: Execution.")
+
+        # 2. Upload CSV file context
+        csv_file = SimpleUploadedFile("data.csv", b"col1,col2\nval1,val2\n", content_type="text/csv")
+        res_file = self.client.post(url, {"file": csv_file, "name": "Metrics", "context_type": "REFERENCE"})
+        self.assertEqual(res_file.status_code, 201)
+        self.assertEqual(res_file.json()["source_type"], "FILE_UPLOAD")
+        self.assertIn("| col1 | col2 |", res_file.json()["normalized_content"])
+
+        # 3. List context
+        list_res = self.client.get(url)
+        self.assertEqual(list_res.status_code, 200)
+        self.assertEqual(len(list_res.json()), 2)
+
+        # 4. Context summary endpoint
+        summary_url = reverse('workspace-context-summary', kwargs={'pk': self.workspace.id})
+        summary_res = self.client.get(summary_url)
+        self.assertEqual(summary_res.status_code, 200)
+        self.assertEqual(summary_res.json()["context"]["total_items"], 2)
+
+        # 5. Remove context item (soft delete)
+        del_url = reverse('workspace-remove-context', kwargs={'pk': self.workspace.id, 'context_id': item_id})
+        del_res = self.client.delete(del_url)
+        self.assertEqual(del_res.status_code, 200)
+
+        # Confirm list now has 1 active item
+        list_after = self.client.get(url)
+        self.assertEqual(len(list_after.json()), 1)
+
+    def test_dm_agent_receives_system_prompt_and_context(self):
+        from .models import WorkspaceSkill, WorkspaceContextItem
+        self.workspace.system_prompt = "You are a code reviewer."
+        self.workspace.save()
+
+        WorkspaceSkill.objects.create(
+            workspace=self.workspace,
+            name="rules.md",
+            content="Rule 1: Be polite."
+        )
+
+        WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.owner,
+            name="API Doc",
+            normalized_content="Endpoint /api/v1/health is alive.",
+            is_active=True
+        )
+
+        self.client.force_login(self.owner)
+        dm_url = reverse('workspace-dm', kwargs={'pk': self.workspace.id})
+        res = self.client.post(
+            dm_url,
+            json.dumps({"message": "Tell me about the health endpoint"}),
+            content_type="application/json"
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["mode"], "SIMULATED")
+
+
+
+
+

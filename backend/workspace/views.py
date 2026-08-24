@@ -7,8 +7,11 @@ from django.utils import timezone
 from datetime import timedelta
 from django.contrib.auth.models import User
 
-from .models import Workspace, WorkspaceMembership
-from .serializers import WorkspaceSerializer, WorkspaceMembershipSerializer
+from .models import Workspace, WorkspaceMembership, WorkspaceSkill, WorkspaceContextItem
+from .serializers import (
+    WorkspaceSerializer, WorkspaceMembershipSerializer,
+    WorkspaceSkillSerializer, WorkspaceContextItemSerializer, UserSerializer
+)
 from .permissions import IsWorkspaceOwner, IsWorkspaceMember, IsAuthenticatedOr401
 
 class WorkspaceViewSet(viewsets.ModelViewSet):
@@ -96,9 +99,15 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         # Determine permission based on action
-        if self.action in ['retrieve', 'workspace_settings', 'dm']:
+        if self.action in [
+            'retrieve', 'workspace_settings', 'dm',
+            'skills', 'context', 'context_summary', 'remove_context'
+        ]:
             return [IsAuthenticatedOr401(), IsWorkspaceMember()]
-        elif self.action in ['update', 'partial_update', 'destroy', 'archive', 'restore', 'list_members', 'add_member', 'remove_member']:
+        elif self.action in [
+            'update', 'partial_update', 'destroy', 'archive', 'restore',
+            'list_members', 'add_member', 'remove_member', 'remove_skill'
+        ]:
             return [IsAuthenticatedOr401(), IsWorkspaceOwner()]
         return [IsAuthenticatedOr401()]
 
@@ -246,12 +255,16 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
         if request.method == 'GET':
             return Response({
+                "id": str(workspace.id),
+                "name": workspace.name,
                 "ai_provider": workspace.ai_provider,
-                "ai_model": workspace.ai_model
+                "ai_model": workspace.ai_model,
+                "system_prompt": workspace.system_prompt,
             }, status=status.HTTP_200_OK)
 
         ai_provider = request.data.get("ai_provider")
         ai_model = request.data.get("ai_model")
+        system_prompt = request.data.get("system_prompt")
 
         SUPPORTED_PROVIDERS = ["simulated", "gemini", "groq", "nvidia_nim", "openclaw", "opencode"]
         if ai_provider is not None:
@@ -265,10 +278,22 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         if ai_model is not None:
             workspace.ai_model = ai_model
 
+        if system_prompt is not None:
+            trimmed = str(system_prompt).strip()
+            if not trimmed:
+                return Response(
+                    {"error": "System prompt cannot be empty. Please enter valid instructions."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            workspace.system_prompt = trimmed
+
         workspace.save()
         return Response({
+            "id": str(workspace.id),
+            "name": workspace.name,
             "ai_provider": workspace.ai_provider,
-            "ai_model": workspace.ai_model
+            "ai_model": workspace.ai_model,
+            "system_prompt": workspace.system_prompt,
         }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='dm', url_name='dm', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])
@@ -364,8 +389,26 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+        from .services.context_service import ContextService
+        try:
+            instructions_res = ContextService.get_workspace_instructions(workspace.id, request.user.id)
+            system_instruction = (
+                "You are an AI assistant in Surge Suite.\n"
+                + instructions_res.get("formatted_instruction_block", "")
+            )
+        except Exception:
+            system_instruction = "You are an AI assistant in Surge Suite."
+
+        try:
+            context_res = ContextService.get_context(workspace.id, request.user.id)
+            context_block = context_res.get("formatted_prompt_block", "")
+        except Exception:
+            context_block = ""
+
         # Construct prompt
         prompt_parts = []
+        if context_block:
+            prompt_parts.append(context_block)
         for turn in history:
             role_label = "User" if turn["role"] == "user" else "Assistant"
             prompt_parts.append(f"{role_label}: {turn['content']}")
@@ -376,6 +419,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         try:
             output, mode = model_provider.generate(
                 prompt,
+                system_instruction=system_instruction,
                 api_key=resolved_key,
                 model=model_name
             )
@@ -397,3 +441,222 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             "model": model_name,
             "mode": mode
         }, status=status.HTTP_200_OK)
+
+    # --- Workspace Skills Management Actions ---
+
+    @action(detail=True, methods=['get', 'post'], url_path='skills', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])
+    def skills(self, request, pk=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+
+        if workspace.is_archived:
+            return Response(
+                {"error": "Cannot manage skills in an archived workspace."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if request.method == 'GET':
+            skills_qs = workspace.skills.all()
+            serializer = WorkspaceSkillSerializer(skills_qs, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        # POST: Create or upload skill (Owner only)
+        if workspace.owner != request.user:
+            return Response(
+                {"error": "Only the workspace owner can create or upload skills."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        uploaded_file = request.FILES.get('file')
+        if uploaded_file:
+            orig_name = uploaded_file.name
+            if not orig_name.lower().endswith('.md'):
+                return Response(
+                    {"error": "Skills accept Markdown (.md) files only."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                content = uploaded_file.read().decode('utf-8')
+            except Exception:
+                try:
+                    uploaded_file.seek(0)
+                    content = uploaded_file.read().decode('latin-1')
+                except Exception as e:
+                    return Response(
+                        {"error": f"Failed to read skill file: {str(e)}"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            if not content.strip():
+                return Response(
+                    {"error": "Uploaded skill file is empty."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            name = request.data.get('name') or orig_name
+            if not name.lower().endswith('.md'):
+                name += '.md'
+            description = request.data.get('description', '')
+        else:
+            name = request.data.get('name', '').strip()
+            description = request.data.get('description', '')
+            content = request.data.get('content', '').strip()
+
+            if not name:
+                return Response(
+                    {"error": "Skill name is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if not name.lower().endswith('.md'):
+                name += '.md'
+            if not content:
+                return Response(
+                    {"error": "Skill markdown content is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        skill, created = WorkspaceSkill.objects.update_or_create(
+            workspace=workspace,
+            name=name,
+            defaults={
+                'description': description,
+                'content': content,
+            }
+        )
+
+        serializer = WorkspaceSkillSerializer(skill)
+        return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=True, methods=['delete'], url_path=r'skills/(?P<skill_id>[^/.]+)', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
+    def remove_skill(self, request, pk=None, skill_id=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+
+        skill = get_object_or_404(WorkspaceSkill, workspace=workspace, id=skill_id)
+        skill.delete()
+        return Response({"success": True, "message": "Skill removed successfully."}, status=status.HTTP_200_OK)
+
+    # --- Workspace Context Management Actions ---
+
+    @action(detail=True, methods=['get', 'post'], url_path='context', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])
+    def context(self, request, pk=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+
+        if workspace.is_archived:
+            return Response(
+                {"error": "Cannot access context in an archived workspace."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if request.method == 'GET':
+            items = workspace.context_items.filter(is_active=True, is_archived=False)
+            serializer = WorkspaceContextItemSerializer(items, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        # POST: Create manual text context or upload document
+        uploaded_file = request.FILES.get('file')
+        if uploaded_file:
+            from .services.context_extractor import ContextExtractor, ContextExtractionError
+            try:
+                raw_bytes = uploaded_file.read()
+                extraction_res = ContextExtractor.extract_from_bytes(
+                    raw_bytes=raw_bytes,
+                    filename=uploaded_file.name,
+                    custom_mime=uploaded_file.content_type
+                )
+            except ContextExtractionError as err:
+                return Response(
+                    {"error": f"Document extraction failed: {str(err)}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            name = request.data.get('name') or extraction_res['original_filename']
+            context_type = request.data.get('context_type', 'REFERENCE')
+            if context_type not in ['USER_CONTEXT', 'REFERENCE', 'INSTITUTIONAL_REFERENCE']:
+                context_type = 'REFERENCE'
+
+            uploaded_file.seek(0)
+            context_item = WorkspaceContextItem.objects.create(
+                workspace=workspace,
+                creator=request.user,
+                name=name,
+                context_type=context_type,
+                source_type='FILE_UPLOAD',
+                raw_file=uploaded_file,
+                original_filename=extraction_res['original_filename'],
+                mime_type=extraction_res['mime_type'],
+                content_hash=extraction_res['content_hash'],
+                file_size=extraction_res['file_size'],
+                normalized_content=extraction_res['normalized_content'],
+                metadata=extraction_res['metadata'],
+                verification_metadata={
+                    "is_verified": False,
+                    "uploaded_by": request.user.username,
+                }
+            )
+            serializer = WorkspaceContextItemSerializer(context_item)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        else:
+            # Manual text entry
+            content = request.data.get('content', '').strip()
+            if not content:
+                return Response(
+                    {"error": "Context content cannot be empty."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            name = request.data.get('name', '').strip() or "Manual Context"
+            context_type = request.data.get('context_type', 'USER_CONTEXT')
+            if context_type not in ['USER_CONTEXT', 'REFERENCE', 'INSTITUTIONAL_REFERENCE']:
+                context_type = 'USER_CONTEXT'
+
+            import hashlib
+            raw_bytes = content.encode('utf-8')
+            content_hash = hashlib.sha256(raw_bytes).hexdigest()
+
+            context_item = WorkspaceContextItem.objects.create(
+                workspace=workspace,
+                creator=request.user,
+                name=name,
+                context_type=context_type,
+                source_type='MANUAL_TEXT',
+                original_filename="",
+                mime_type="text/plain",
+                content_hash=content_hash,
+                file_size=len(raw_bytes),
+                normalized_content=content,
+                metadata={"char_count": len(content), "line_count": len(content.splitlines())},
+                verification_metadata={
+                    "is_verified": False,
+                    "entered_by": request.user.username,
+                }
+            )
+            serializer = WorkspaceContextItemSerializer(context_item)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['delete'], url_path=r'context/(?P<context_id>[^/.]+)', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])
+    def remove_context(self, request, pk=None, context_id=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+
+        item = get_object_or_404(WorkspaceContextItem, workspace=workspace, id=context_id)
+        # Soft delete / archive
+        item.is_active = False
+        item.is_archived = True
+        item.save()
+        return Response({"success": True, "message": "Context item removed successfully."}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='context/summary', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])
+    def context_summary(self, request, pk=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+
+        from .services.context_service import ContextService
+        context_data = ContextService.get_context(workspace.id, request.user.id)
+        instructions_data = ContextService.get_workspace_instructions(workspace.id, request.user.id)
+        return Response({
+            "context": context_data,
+            "instructions": instructions_data,
+        }, status=status.HTTP_200_OK)
+

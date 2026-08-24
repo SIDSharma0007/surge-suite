@@ -5,6 +5,7 @@ import ThemeToggle from '../components/ThemeToggle';
 import Notes from './Notes.jsx';
 import SettingsTab from '../components/SettingsTab';
 import DMAgentTab from '../components/DMAgentTab';
+import WorkspaceSettingsModal from '../components/WorkspaceSettingsModal';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import VoiceCommandButton from '../components/VoiceCommandButton';
 import AudioResponsePlayer from '../components/AudioResponsePlayer';
@@ -17,6 +18,7 @@ import {
   FileText, 
   FolderOpen, 
   Settings, 
+  Sliders,
   LogOut, 
   Plus, 
   Menu, 
@@ -57,6 +59,10 @@ export default function Dashboard() {
   const [membersList, setMembersList] = useState([]);
   const [allUsersList, setAllUsersList] = useState([]);
   const [selectedUserToAdd, setSelectedUserToAdd] = useState('');
+
+  // Workspace Settings & Context Modal states
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [settingsWorkspace, setSettingsWorkspace] = useState(null);
 
   const [pinnedFiles, setPinnedFiles] = useState([]);
 
@@ -696,6 +702,16 @@ export default function Dashboard() {
                                 Select Workspace
                               </button>
                             )}
+                            <button 
+                              onClick={() => {
+                                setSettingsWorkspace(ws);
+                                setSettingsModalOpen(true);
+                              }} 
+                              style={styles.iconBtn} 
+                              title="Workspace Settings & Context"
+                            >
+                              Settings
+                            </button>
                             {isOwner && !isEditing && (
                               <>
                                 <button onClick={() => handleStartEdit(ws)} style={styles.iconBtn} title="Rename Workspace">
@@ -794,6 +810,14 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+
+              {/* Workspace Settings & Context Layer Modal */}
+              <WorkspaceSettingsModal
+                workspace={settingsWorkspace}
+                isOpen={settingsModalOpen}
+                onClose={() => setSettingsModalOpen(false)}
+                onWorkspaceUpdated={fetchWorkspaces}
+              />
 
             </div>
           ) : activeTab === 'Notes' ? (
