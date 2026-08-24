@@ -1482,7 +1482,7 @@ class TaskSynthesisTestCase(TestCase):
 
             execution = exec_service.execute_task(task, user=self.user)
 
-            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(execution.status, 'FAILED')
             self.assertEqual(execution.result, "The filesystem listing failed, so I could not answer.")
 
             # Verify no bash tool execution event was triggered
@@ -1538,7 +1538,7 @@ class TaskSynthesisTestCase(TestCase):
 
             execution = exec_service.execute_task(task, user=self.user)
 
-            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(execution.status, 'FAILED')
             self.assertEqual(execution.result, "I reached the maximum step limit.")
 
             # Verify prompt contains step limit limitation warning
@@ -2335,6 +2335,684 @@ class EvidenceGroundedExecutionPipelineTestCase(TestCase):
         download_res = client.get(f"/api/v1/tasks/{failed_task.id}/walkthrough/?download=true")
         self.assertEqual(download_res.status_code, 200)
         self.assertEqual(download_res['Content-Type'], 'text/markdown')
+
+
+class Phase5Tests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='phase5_user', password='password')
+        from workspace.models import Workspace
+        from task.models import Agent, Task
+        self.workspace = Workspace.objects.create(
+            name="Phase 5 Workspace",
+            owner=self.user,
+            ai_provider='gemini',
+            ai_model='gemini-2.5-flash'
+        )
+        # Create user provider credential
+        from task.models import UserProviderCredential
+        from task.utils.encryption import encrypt_value
+        UserProviderCredential.objects.create(
+            user=self.user,
+            provider='gemini',
+            encrypted_api_key=encrypt_value('fake-key')
+        )
+        self.agent = Agent.objects.create(
+            name="Phase 5 Agent",
+            provider="gemini",
+            model="gemini-2.5-flash",
+            status="ACTIVE"
+        )
+
+    # 1. A task that does not require MCP does not initialize unrelated MCP servers.
+    @patch('requests.post')
+    def test_no_unrelated_mcp_servers_initialized(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Simple reasoning or local command output."}]}}]
+        }
+        mock_post.return_value = mock_resp
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Tell me the current time.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+        
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = []
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            self.assertEqual(execution.status, 'COMPLETED')
+            
+            mock_registry_inst.initialize_servers.assert_not_called()
+
+    # 2. A task with an obviously relevant configured MCP initializes only that MCP.
+    @patch('requests.post')
+    def test_relevant_mcp_server_initialized(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "."}}}'}]}}]
+        }
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Done."}]}}]
+        }
+        mock_resp_3 = MagicMock(status_code=200)
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Final result"}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="List the contents of the workspace root.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{
+                "name": "filesystem.list_directory",
+                "server": "filesystem",
+                "description": "List files",
+                "input_schema": {},
+                "type": "mcp"
+            }]
+            mock_registry_inst.tools = {
+                "filesystem.list_directory": (MagicMock(), {
+                    "name": "filesystem.list_directory",
+                    "server": "filesystem",
+                    "description": "List files",
+                    "input_schema": {},
+                    "type": "mcp",
+                    "original_name": "list_directory"
+                })
+            }
+            mock_registry_inst.execute_tool.return_value = {"result": "files listed"}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            self.assertEqual(execution.status, 'COMPLETED')
+            mock_registry_inst.initialize_servers.assert_called_once_with(server_names=['filesystem'])
+
+    # 3. An unavailable relevant MCP falls back to Bash when Bash can safely accomplish the task.
+    @patch('requests.post')
+    def test_unavailable_mcp_falls_back_to_bash(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task, ExecutionEvent
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "echo hello"}}}'}]}}]
+        }
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Completed"}]}}]
+        }
+        mock_resp_3 = MagicMock(status_code=200)
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Synthesized hello"}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find files.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = []
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            self.assertEqual(execution.status, 'COMPLETED')
+            
+            events = ExecutionEvent.objects.filter(task=task)
+            event_types = [e.event_type for e in events]
+            self.assertIn('FALLBACK_SELECTED', event_types)
+            self.assertIn('TOOL_COMPLETED', event_types)
+
+    # 4. Bash SAFE / REQUIRES_APPROVAL / BLOCKED behavior remains unchanged.
+    def test_bash_security_tiers_behavior(self):
+        from task.services.capability_registry import CapabilityRegistry
+        registry = CapabilityRegistry()
+
+        # SAFE command is allowed
+        res_safe = registry.execute_tool("bash.execute", {"command": "echo hello"})
+        self.assertEqual(res_safe.get("exit_code"), 0)
+        self.assertIn("hello", res_safe.get("stdout"))
+
+        # REQUIRES_APPROVAL raises ApprovalRequiredException
+        from task.services.capability_registry import ApprovalRequiredException
+        with self.assertRaises(ApprovalRequiredException):
+            registry.execute_tool("bash.execute", {"command": "find . -name '*.py'"})
+
+        # BLOCKED command returns an access denied error dict
+        res_blocked = registry.execute_tool("bash.execute", {"command": "cat .env"})
+        self.assertIn("error", res_blocked)
+        self.assertIn("Access denied", res_blocked["error"])
+
+    # 5. REQUIRES_APPROVAL command pauses execution and creates HumanApprovalRequest when MCP is inactive
+    @patch('requests.post')
+    def test_bash_requires_approval_pauses_execution(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task, HumanApprovalRequest
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "find . -name \\"*.py\\""}}}'}]}}]
+        }
+        mock_post.return_value = mock_resp_1
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find all Python files in the workspace.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = []
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            self.assertEqual(execution.status, 'WAITING_FOR_APPROVAL')
+            self.assertEqual(task.status, 'WAITING_FOR_APPROVAL')
+
+            # Verify an approval request was created
+            approvals = HumanApprovalRequest.objects.filter(task=task)
+            self.assertEqual(approvals.count(), 1)
+            approval = approvals.first()
+            self.assertEqual(approval.status, 'PENDING')
+            self.assertEqual(approval.command, 'find . -name "*.py"')
+
+    # 6. REQUIRES_APPROVAL command pauses execution and creates HumanApprovalRequest when MCP is active
+    @patch('requests.post')
+    def test_bash_requires_approval_pauses_execution_with_active_mcp(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task, HumanApprovalRequest
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "find . -name \\"*.py\\""}}}'}]}}]
+        }
+        mock_post.return_value = mock_resp_1
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find all Python files in the workspace.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            # Include filesystem.list_directory to simulate active filesystem MCP
+            mock_registry_inst.discover_tools.return_value = [{
+                "name": "filesystem.list_directory",
+                "server": "filesystem",
+                "description": "List files",
+                "input_schema": {},
+                "type": "mcp"
+            }]
+            mock_registry_inst.tools = {
+                "filesystem.list_directory": (MagicMock(), {
+                    "name": "filesystem.list_directory",
+                    "server": "filesystem",
+                    "description": "List files",
+                    "input_schema": {},
+                    "type": "mcp",
+                    "original_name": "list_directory"
+                })
+            }
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            # The execution should pause for approval, NOT fail with security violation
+            self.assertEqual(execution.status, 'WAITING_FOR_APPROVAL')
+            self.assertEqual(task.status, 'WAITING_FOR_APPROVAL')
+
+            # Verify an approval request was created
+            approvals = HumanApprovalRequest.objects.filter(task=task)
+            self.assertEqual(approvals.count(), 1)
+            approval = approvals.first()
+            self.assertEqual(approval.status, 'PENDING')
+            self.assertEqual(approval.command, 'find . -name "*.py"')
+
+    # 7. Failed MCP -> Bash fallback is permitted
+    @patch('requests.post')
+    def test_failed_mcp_fallback_permitted(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task, HumanApprovalRequest
+        # First turn: call list_directory, it fails
+        # Second turn: fallback to find command
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "."}}}'}]}}]
+        }
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "find . -name \\"*.py\\""}}}'}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find all Python files.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{
+                "name": "filesystem.list_directory",
+                "server": "filesystem",
+                "description": "List files",
+                "input_schema": {},
+                "type": "mcp"
+            }]
+            mock_registry_inst.tools = ["filesystem.list_directory"]
+            # First tool execution fails
+            mock_registry_inst.execute_tool.return_value = {"error": "Failed to list directory"}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            # Falls back to find which is REQUIRES_APPROVAL -> WAITING_FOR_APPROVAL
+            self.assertEqual(execution.status, 'WAITING_FOR_APPROVAL')
+            self.assertEqual(task.status, 'WAITING_FOR_APPROVAL')
+
+    # 8. Failed MCP -> Bash still goes through CapabilityRegistry (denying blocked command)
+    @patch('requests.post')
+    def test_failed_mcp_bash_still_goes_through_registry(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "."}}}'}]}}]
+        }
+        # Model tries a BLOCKED command: cat .env
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "cat .env"}}}'}]}}]
+        }
+        # Model then provides final direct answer
+        mock_resp_3 = MagicMock(status_code=200)
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Failed because I was blocked."}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find all Python files.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{
+                "name": "filesystem.list_directory",
+                "server": "filesystem",
+                "description": "List files",
+                "input_schema": {},
+                "type": "mcp"
+            }]
+            mock_registry_inst.tools = ["filesystem.list_directory"]
+            mock_registry_inst.execute_tool.return_value = {"error": "Failed to list directory"}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            # The execution should fail since it was blocked and steps exhausted
+            self.assertEqual(execution.status, 'FAILED')
+            self.assertEqual(task.status, 'FAILED')
+
+    # 9. Allow Once resumes the same execution and completes
+    @patch('requests.post')
+    def test_allow_once_resumes_execution(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task, HumanApprovalRequest
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "find . -name \\"*.py\\""}}}'}]}}]
+        }
+        # Resumed generation: yields final answer
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Successfully found python files."}]}}]
+        }
+        # Resumed synthesis
+        mock_resp_3 = MagicMock(status_code=200)
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Synthesis: Successfully found python files."}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find python files.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = []
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            self.assertEqual(execution.status, 'WAITING_FOR_APPROVAL')
+
+            approval = HumanApprovalRequest.objects.get(task=task)
+            # Approve it
+            approval.status = 'APPROVED'
+            approval.resolved_by = self.user
+            approval.save()
+
+            resumed_exec = exec_service.resume_from_approval(
+                task=task,
+                execution=execution,
+                approval=approval,
+                tool_result_or_denial={"output": "file1.py\nfile2.py"},
+                user=self.user,
+                is_approved=True
+            )
+            self.assertEqual(resumed_exec.status, 'COMPLETED')
+            self.assertEqual(task.status, 'COMPLETED')
+
+    # 10. Deny prevents execution and fails the task
+    @patch('requests.post')
+    def test_deny_prevents_execution_and_fails(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task, HumanApprovalRequest
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "find . -name \\"*.py\\""}}}'}]}}]
+        }
+        # Resumed generation after denial
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "I was denied search access."}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find python files.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = []
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            self.assertEqual(execution.status, 'WAITING_FOR_APPROVAL')
+
+            approval = HumanApprovalRequest.objects.get(task=task)
+            # Deny it
+            approval.status = 'DENIED'
+            approval.resolved_by = self.user
+            approval.save()
+
+            resumed_exec = exec_service.resume_from_approval(
+                task=task,
+                execution=execution,
+                approval=approval,
+                tool_result_or_denial="Access denied by human user.",
+                user=self.user,
+                is_approved=False
+            )
+            # Should transition to FAILED because the critical tool request was denied
+            self.assertEqual(resumed_exec.status, 'FAILED')
+            self.assertEqual(task.status, 'FAILED')
+
+    # 11. Identical failed tool calls cannot retry indefinitely
+    @patch('requests.post')
+    def test_duplicate_tool_retry_protection(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task
+        # First turn: call filesystem.list_directory(path="non-existent")
+        # Second turn: retry the exact same tool and path
+        # Third turn: provide direct answer
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "non-existent"}}}'}]}}]
+        }
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "non-existent"}}}'}]}}]
+        }
+        mock_resp_3 = MagicMock(status_code=200)
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Failed because of duplicate call rejection."}]}}]
+        }
+        mock_resp_4 = MagicMock(status_code=200)
+        mock_resp_4.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Synthesis: Failed because of duplicate call rejection."}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3, mock_resp_4]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="List path.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{
+                "name": "filesystem.list_directory",
+                "server": "filesystem",
+                "description": "List files",
+                "input_schema": {},
+                "type": "mcp"
+            }]
+            mock_registry_inst.tools = ["filesystem.list_directory"]
+            mock_registry_inst.execute_tool.return_value = {"error": "Path non-existent does not exist."}
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            # The duplicate call error must be recorded in the events
+            from task.models import ExecutionEvent
+            events = list(ExecutionEvent.objects.filter(task=task, event_type='TOOL_FAILED'))
+            self.assertEqual(len(events), 2)
+            self.assertIn("already executed and failed", events[1].metadata.get("error", ""))
+            self.assertEqual(execution.status, 'FAILED')
+
+    # 12. Different arguments remain executable
+    @patch('requests.post')
+    def test_different_arguments_remain_executable(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task
+        # First turn: call filesystem.list_directory(path="pathA")
+        # Second turn: call filesystem.list_directory(path="pathB")
+        # Third turn: provide direct answer
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "pathA"}}}'}]}}]
+        }
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "filesystem.list_directory", "arguments": {"path": "pathB"}}}'}]}}]
+        }
+        mock_resp_3 = MagicMock(status_code=200)
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Found path B."}]}}]
+        }
+        mock_resp_4 = MagicMock(status_code=200)
+        mock_resp_4.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Synthesis: Found path B."}]}}]
+        }
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3, mock_resp_4]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="List path.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = [{
+                "name": "filesystem.list_directory",
+                "server": "filesystem",
+                "description": "List files",
+                "input_schema": {},
+                "type": "mcp"
+            }]
+            mock_registry_inst.tools = ["filesystem.list_directory"]
+            # First tool execution fails, second succeeds
+            mock_registry_inst.execute_tool.side_effect = [{"error": "not found"}, {"files": ["main.py"]}]
+            mock_registry_class.return_value = mock_registry_inst
+
+            execution = exec_service.execute_task(task, user=self.user)
+            actions = list(execution.actions.filter(action_type='execute_tool'))
+            self.assertEqual(len(actions), 2)
+            self.assertNotIn("already executed and failed", actions[1].output_data.get("result", {}).get("error", ""))
+            self.assertEqual(execution.status, 'COMPLETED')
+
+    # 13. Sequential human approvals: find -> approval -> resume -> cat -> second approval -> resume -> completed
+    @patch('requests.post')
+    def test_sequential_human_approvals_flow(self, mock_post):
+        from task.services.execution_service import ExecutionService
+        from task.models import Task, HumanApprovalRequest
+
+        # Step 1: execute_task() starts
+        # Model returns find command
+        mock_resp_1 = MagicMock(status_code=200)
+        mock_resp_1.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "find . -name \\"*.py\\""}}}'}]}}]
+        }
+
+        # Step 2: resume_from_approval() #1 starts
+        # Model returns cat command
+        mock_resp_2 = MagicMock(status_code=200)
+        mock_resp_2.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"tool_call": {"name": "bash.execute", "arguments": {"command": "cat main.py"}}}'}]}}]
+        }
+
+        # Step 3: resume_from_approval() #2 starts
+        # Model returns final answer
+        mock_resp_3 = MagicMock(status_code=200)
+        mock_resp_3.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Successfully read python file content."}]}}]
+        }
+
+        # Step 4: Resumed synthesis
+        mock_resp_4 = MagicMock(status_code=200)
+        mock_resp_4.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": "Synthesis: Successfully read python file content."}]}}]
+        }
+
+        mock_post.side_effect = [mock_resp_1, mock_resp_2, mock_resp_3, mock_resp_4]
+
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            problem_statement="Find a python file and cat its content.",
+            assigned_agent=self.agent,
+            status="PENDING"
+        )
+
+        exec_service = ExecutionService()
+        with patch('task.services.mcp.registry.MCPRegistry') as mock_registry_class:
+            mock_registry_inst = MagicMock()
+            mock_registry_inst.discover_tools.return_value = []
+            mock_registry_class.return_value = mock_registry_inst
+
+            # 1. Execute task
+            execution = exec_service.execute_task(task, user=self.user)
+            self.assertEqual(execution.status, 'WAITING_FOR_APPROVAL')
+            self.assertEqual(task.status, 'WAITING_FOR_APPROVAL')
+
+            approvals = list(HumanApprovalRequest.objects.filter(task=task).order_by('created_at'))
+            self.assertEqual(len(approvals), 1)
+            approval1 = approvals[0]
+            self.assertEqual(approval1.status, 'PENDING')
+            self.assertEqual(approval1.command, 'find . -name "*.py"')
+
+            # Approve find
+            approval1.status = 'APPROVED'
+            approval1.resolved_by = self.user
+            approval1.save()
+
+            # 2. First Resume
+            execution = exec_service.resume_from_approval(
+                task=task,
+                execution=execution,
+                approval=approval1,
+                tool_result_or_denial={"output": "main.py"},
+                user=self.user,
+                is_approved=True
+            )
+
+            # Execution must transition back to WAITING_FOR_APPROVAL for the cat command
+            self.assertEqual(execution.status, 'WAITING_FOR_APPROVAL')
+            self.assertEqual(task.status, 'WAITING_FOR_APPROVAL')
+
+            approvals = list(HumanApprovalRequest.objects.filter(task=task).order_by('created_at'))
+            self.assertEqual(len(approvals), 2)
+            approval2 = approvals[1]
+            self.assertEqual(approval2.status, 'PENDING')
+            self.assertEqual(approval2.command, 'cat main.py')
+
+            # Approve cat
+            approval2.status = 'APPROVED'
+            approval2.resolved_by = self.user
+            approval2.save()
+
+            # 3. Second Resume
+            execution = exec_service.resume_from_approval(
+                task=task,
+                execution=execution,
+                approval=approval2,
+                tool_result_or_denial={"output": "print('hello')"},
+                user=self.user,
+                is_approved=True
+            )
+
+            # Execution must finally reach COMPLETED
+            self.assertEqual(execution.status, 'COMPLETED')
+            self.assertEqual(task.status, 'COMPLETED')
+
+
 
 
 

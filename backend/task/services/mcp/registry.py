@@ -7,9 +7,11 @@ class MCPRegistry:
         self.clients = {}
         self.tools = {} # Maps prefixed_name -> (client, tool_info)
 
-    def initialize_servers(self):
+    def initialize_servers(self, server_names=None):
         for cfg in MCP_SERVER_CONFIGS:
             name = cfg["name"]
+            if server_names is not None and name not in server_names:
+                continue
             command = cfg["command"]
             try:
                 client = MCPClient(name, command)

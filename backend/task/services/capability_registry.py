@@ -90,7 +90,7 @@ class CapabilityRegistry:
             name="bash.execute",
             description=(
                 "Execute a shell command inside the project directory. "
-                "Use ONLY as a fallback when no suitable MCP capability exists. "
+                "Use when no suitable MCP capability is available to directly satisfy the request. "
                 "Some commands require human approval before execution."
             ),
             schema={

@@ -18,10 +18,23 @@ SEARCH_SERVER_PATH = os.path.abspath(os.path.join(
 MCP_SERVER_CONFIGS = [
     {
         "name": "filesystem",
-        "command": [PYTHON_EXECUTABLE, FILESYSTEM_SERVER_PATH]
+        "command": [PYTHON_EXECUTABLE, FILESYSTEM_SERVER_PATH],
+        "tools": [
+            {
+                "name": "list_directory",
+                "description": "List files and directories in the workspace root or subdirectories."
+            }
+        ]
     },
     {
         "name": "search",
-        "command": [PYTHON_EXECUTABLE, SEARCH_SERVER_PATH]
+        "command": [PYTHON_EXECUTABLE, SEARCH_SERVER_PATH],
+        "tools": [
+            {
+                "name": "search_web",
+                "description": "Search the web for up-to-date information."
+            }
+        ]
     }
 ]
+
