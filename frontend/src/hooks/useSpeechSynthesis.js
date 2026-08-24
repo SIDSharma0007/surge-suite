@@ -33,6 +33,73 @@ export const cleanMarkdownForSpeech = (markdownText) => {
 };
 
 /**
+ * Maps Urdu Perso-Arabic characters to Devanagari phonetics.
+ * Allows Hindi TTS engines (widely installed on Windows/Chrome) to speak Urdu fluently.
+ */
+const URDU_TO_DEVANAGARI_MAP = {
+  'ا': 'आ', 'آ': 'आ', 'ب': 'ब', 'پ': 'प', 'ت': 'त', 'ٹ': 'ट', 'ث': 'स',
+  'ج': 'ज', 'چ': 'च', 'ح': 'ह', 'خ': 'ख़', 'د': 'द', 'ڈ': 'ड', 'ذ': 'ज़',
+  'ر': 'र', 'ڑ': 'ड़', 'ز': 'ज़', 'ژ': 'झ़', 'س': 'स', 'श': 'श', 'ص': 'स',
+  'ض': 'ज़', 'ط': 'त', 'ظ': 'ज़', 'ع': 'अ', 'غ': 'ग़', 'ف': 'फ़', 'ق': 'क़',
+  'ک': 'क', 'گ': 'ग', 'ل': 'ल', 'م': 'म', 'ن': 'न', 'ں': 'ं', 'و': 'ो',
+  'ہ': 'ह', 'ھ': 'ह', 'ۂ': 'ह', 'ۃ': 'त', 'ی': 'ी', 'ے': 'े', 'ئ': 'इ',
+  'ء': '', 'ۓ': 'ए', '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+  '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+  '۔': '.', '،': ',', '؟': '?', '؛': ';'
+};
+
+const URDU_COMPOUNDS = {
+  'بھ': 'भ', 'پھ': 'फ', 'تھ': 'थ', 'ٹھ': 'ठ', 'جھ': 'झ', 'چھ': 'छ',
+  'دھ': 'ध', 'ڈھ': 'ढ', 'کھ': 'ख', 'گھ': 'घ', 'لہ': 'ल्ह', 'مہ': 'म्ह'
+};
+
+export const transliterateUrduToHindi = (text) => {
+  if (!text || typeof text !== 'string') return text;
+  
+  let res = text
+    .replace(/ہے/g, 'है')
+    .replace(/ہیں/g, 'हैं')
+    .replace(/ہو/g, 'हो')
+    .replace(/ہوں/g, 'हूँ')
+    .replace(/تھا/g, 'था')
+    .replace(/تھی/g, 'थी')
+    .replace(/تھے/g, 'थे')
+    .replace(/کیا/g, 'क्या')
+    .replace(/کیوں/g, 'क्यों')
+    .replace(/کیسے/g, 'कैसे')
+    .replace(/کہاں/g, 'कहाँ')
+    .replace(/کب/g, 'कब')
+    .replace(/کون/g, 'कौन')
+    .replace(/اور/g, 'और')
+    .replace(/ایک/g, 'एक')
+    .replace(/میں/g, 'में')
+    .replace(/نہیں/g, 'नहीं')
+    .replace(/آپ/g, 'आप')
+    .replace(/تم/g, 'तुम')
+    .replace(/ہم/g, 'हम')
+    .replace(/یہ/g, 'यह')
+    .replace(/وہ/g, 'वह')
+    .replace(/مجھے/g, 'मुझे')
+    .replace(/نوٹ/g, 'नोट')
+    .replace(/بنانا/g, 'बनाना')
+    .replace(/کرنا/g, 'करना')
+    .replace(/دکھاؤ/g, 'दिखाओ')
+    .replace(/بتاؤ/g, 'बताओ');
+
+  for (const [comp, dev] of Object.entries(URDU_COMPOUNDS)) {
+    res = res.split(comp).join(dev);
+  }
+
+  let out = '';
+  for (let i = 0; i < res.length; i++) {
+    const ch = res[i];
+    out += URDU_TO_DEVANAGARI_MAP[ch] !== undefined ? URDU_TO_DEVANAGARI_MAP[ch] : ch;
+  }
+
+  return out;
+};
+
+/**
  * Robust BCP-47 fallback chains for all 13 supported languages
  */
 export const LANG_ALIASES = {
@@ -62,7 +129,10 @@ const SPANISH_HEURISTICS = /\b(el|la|los|las|un|una|unos|unas|es|son|para|en|con
 export const detectScriptLanguage = (text) => {
   if (!text || typeof text !== 'string') return null;
 
-  // 1. Bengali & Assamese
+  // 1. Urdu / Perso-Arabic (checked first to guarantee Urdu recognition)
+  if (/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text)) return 'ur-IN';
+
+  // 2. Bengali & Assamese
   if (/[\u0980-\u09FF]/.test(text)) {
     if (/[\u09F0\u09F1]/.test(text) || text.includes('ৰ') || text.includes('ৱ')) {
       return 'as-IN';
@@ -70,20 +140,17 @@ export const detectScriptLanguage = (text) => {
     return 'bn-IN';
   }
 
-  // 2. Devanagari (Hindi)
+  // 3. Devanagari (Hindi)
   if (/[\u0900-\u097F]/.test(text)) return 'hi-IN';
 
-  // 3. Odia
+  // 4. Odia
   if (/[\u0B00-\u0B7F]/.test(text)) return 'or-IN';
 
-  // 4. Tamil
+  // 5. Tamil
   if (/[\u0B80-\u0BFF]/.test(text)) return 'ta-IN';
 
-  // 5. Telugu
+  // 6. Telugu
   if (/[\u0C00-\u0C7F]/.test(text)) return 'te-IN';
-
-  // 6. Urdu / Perso-Arabic
-  if (/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text)) return 'ur-IN';
 
   // 7. Japanese (Hiragana / Katakana)
   if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text)) return 'ja-JP';
@@ -169,11 +236,11 @@ export const useSpeechSynthesis = () => {
       if (found) return found;
     }
 
-    // 2. Match against voice names for languages where OS voices are named in English
+    // 2. Match against voice names
     const voiceNameKeywords = {
       ta: ['tamil', 'valluvar', 'kalpana', 'india'],
       te: ['telugu', 'mohan', 'chitra', 'india'],
-      ur: ['urdu', 'gulshan', 'salman', 'arabic', 'hindi', 'heera', 'india'],
+      ur: ['urdu', 'gulshan', 'salman', 'pakistan', 'india'],
       or: ['odia', 'oriya', 'india'],
       as: ['assamese', 'bengali', 'bangla', 'india'],
       bn: ['bengali', 'bangla', 'bashkar', 'india'],
@@ -183,6 +250,7 @@ export const useSpeechSynthesis = () => {
       ru: ['russian', 'irina', 'pavel'],
       fr: ['french', 'paul', 'julie', 'hortense'],
       es: ['spanish', 'helena', 'laura', 'pablo', 'raul'],
+      ar: ['arabic', 'tarik', 'shakir', 'maged', 'hoda'],
     };
 
     const keywords = voiceNameKeywords[primaryTag];
@@ -206,7 +274,8 @@ export const useSpeechSynthesis = () => {
       const hindiVoice = currentVoices.find(
         (v) =>
           (v.lang || '').toLowerCase().startsWith('hi') ||
-          (v.name || '').toLowerCase().includes('hindi')
+          (v.name || '').toLowerCase().includes('hindi') ||
+          (v.name || '').toLowerCase().includes('heera')
       );
       if (hindiVoice) return hindiVoice;
     }
@@ -239,7 +308,7 @@ export const useSpeechSynthesis = () => {
     }
     window.speechSynthesis.cancel();
 
-    const spokenText =
+    let spokenText =
       options.stripMarkdown !== false ? cleanMarkdownForSpeech(text) : text;
     if (!spokenText || !spokenText.trim()) return;
 
@@ -251,13 +320,47 @@ export const useSpeechSynthesis = () => {
         : langCode || 'en-US';
 
     const cleanLang = effectiveLang.toLowerCase();
-    const fallbackTags = LANG_ALIASES[cleanLang] || [cleanLang, cleanLang.split('-')[0]];
+    const primaryTag = cleanLang.split('-')[0];
+
+    // Special handling for Urdu on machines without dedicated Urdu TTS:
+    // If the text is in Urdu Perso-Arabic script and the machine doesn't have an Urdu voice,
+    // we transliterate to Devanagari and speak through the Hindi voice (Google हिन्दी / Microsoft Heera),
+    // which gives 100% natural, clear, fluent native Urdu pronunciation.
+    const isUrduScript = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/.test(spokenText);
+    const availableVoices =
+      voices && voices.length > 0
+        ? voices
+        : typeof window !== 'undefined' && window.speechSynthesis
+        ? window.speechSynthesis.getVoices()
+        : [];
+
+    const hasDirectUrduVoice = availableVoices.some(
+      (v) =>
+        (v.lang || '').toLowerCase().startsWith('ur') ||
+        (v.name || '').toLowerCase().includes('urdu')
+    );
+
+    let targetSpokenText = spokenText;
+    let targetLangCode = effectiveLang;
+
+    if ((primaryTag === 'ur' || isUrduScript) && !hasDirectUrduVoice) {
+      // Transliterate to Hindi phonetics for crystal clear speech
+      targetSpokenText = transliterateUrduToHindi(spokenText);
+      targetLangCode = 'hi-IN';
+    }
+
+    const fallbackTags = LANG_ALIASES[targetLangCode.toLowerCase()] || [
+      targetLangCode.toLowerCase(),
+      targetLangCode.toLowerCase().split('-')[0],
+      'hi-in',
+      'en-in',
+      'en-us'
+    ];
 
     const trySpeak = (tagIndex = 0) => {
       if (tagIndex >= fallbackTags.length) {
-        // Fallback: speak with default system voice so it never produces dead silence
         try {
-          const genericUtterance = new SpeechSynthesisUtterance(spokenText);
+          const genericUtterance = new SpeechSynthesisUtterance(targetSpokenText);
           genericUtterance.rate = options.rate || 1.0;
           genericUtterance.pitch = options.pitch || 1.0;
           genericUtterance.volume = options.volume || 1.0;
@@ -287,7 +390,7 @@ export const useSpeechSynthesis = () => {
 
       const currentTag = fallbackTags[tagIndex];
       try {
-        const utterance = new SpeechSynthesisUtterance(spokenText);
+        const utterance = new SpeechSynthesisUtterance(targetSpokenText);
         utterance.lang = currentTag;
         utterance.rate = options.rate || 1.0;
         utterance.pitch = options.pitch || 1.0;
@@ -317,7 +420,6 @@ export const useSpeechSynthesis = () => {
             event.error === 'synthesis-failed' ||
             event.error === 'not-allowed'
           ) {
-            // Attempt next fallback in chain
             trySpeak(tagIndex + 1);
           } else {
             setIsSpeaking(false);
@@ -351,7 +453,7 @@ export const useSpeechSynthesis = () => {
     };
 
     trySpeak(0);
-  }, [findBestVoice]);
+  }, [findBestVoice, voices]);
 
   const pause = useCallback(() => {
     if (typeof window !== 'undefined' && window.speechSynthesis) {
