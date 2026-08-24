@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Pause, Square, Volume2, Globe } from 'lucide-react';
-import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
+import { useSpeechSynthesis, detectScriptLanguage } from '../hooks/useSpeechSynthesis';
 import { VOICE_LANGUAGES } from '../hooks/useVoiceRecognition';
 
 export default function AudioResponsePlayer({
@@ -23,8 +23,11 @@ export default function AudioResponsePlayer({
     return null;
   }
 
+  const detectedLang = detectScriptLanguage(text);
+  const effectiveLang = (selectedLang === 'en-IN' || selectedLang === 'en-US') && detectedLang ? detectedLang : selectedLang;
+
   const currentLangObj =
-    VOICE_LANGUAGES.find((l) => l.code === selectedLang) || VOICE_LANGUAGES[0];
+    VOICE_LANGUAGES.find((l) => l.code === effectiveLang) || VOICE_LANGUAGES[0];
 
   const handlePlayToggle = (e) => {
     if (e) e.preventDefault();
@@ -37,7 +40,7 @@ export default function AudioResponsePlayer({
         pause();
       }
     } else {
-      speak(text, selectedLang);
+      speak(text, effectiveLang);
     }
   };
 
