@@ -93,7 +93,6 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 import urllib.parse
 
-USE_SQLITE = config("USE_SQLITE", default=True, cast=bool)
 DATABASE_URL = config("DATABASE_URL", default="")
 
 if DATABASE_URL:
