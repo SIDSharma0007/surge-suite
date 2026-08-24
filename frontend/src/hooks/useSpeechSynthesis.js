@@ -33,18 +33,18 @@ export const cleanMarkdownForSpeech = (markdownText) => {
 };
 
 /**
- * BCP-47 fallback aliases for all 13 supported languages across different OS/browser TTS engines
+ * Robust BCP-47 fallback chains for all 13 supported languages
  */
 export const LANG_ALIASES = {
   'en-in': ['en-in', 'en-us', 'en-gb', 'en'],
   'en-us': ['en-us', 'en-in', 'en-gb', 'en'],
-  'hi-in': ['hi-in', 'hi', 'hin'],
-  'bn-in': ['bn-in', 'bn-bd', 'bn', 'ben'],
-  'as-in': ['as-in', 'as', 'asm', 'bn-in', 'bn'],
-  'or-in': ['or-in', 'ory-in', 'or', 'ory'],
-  'ta-in': ['ta-in', 'ta-lk', 'ta-sg', 'ta', 'tam'],
-  'te-in': ['te-in', 'te', 'tel'],
-  'ur-in': ['ur-in', 'ur-pk', 'ur', 'urd', 'ar'],
+  'hi-in': ['hi-in', 'hi', 'hin', 'ur-in'],
+  'bn-in': ['bn-in', 'bn-bd', 'bn', 'ben', 'hi-in'],
+  'as-in': ['as-in', 'as', 'asm', 'bn-in', 'bn-bd', 'bn', 'hi-in'],
+  'or-in': ['or-in', 'ory-in', 'or', 'ory', 'hi-in', 'bn-in'],
+  'ta-in': ['ta-in', 'ta-lk', 'ta-sg', 'ta', 'tam', 'te-in', 'hi-in'],
+  'te-in': ['te-in', 'te', 'tel', 'ta-in', 'hi-in'],
+  'ur-in': ['ur-in', 'ur-pk', 'ur', 'urd', 'hi-in', 'hi', 'ar-sa', 'ar'],
   'zh-cn': ['zh-cn', 'zh-tw', 'zh-hk', 'zh', 'cmn', 'yue'],
   'ja-jp': ['ja-jp', 'ja', 'jpn'],
   'fr-fr': ['fr-fr', 'fr-ca', 'fr-be', 'fr', 'fra', 'fre'],
@@ -147,33 +147,85 @@ export const useSpeechSynthesis = () => {
   }, []);
 
   const findBestVoice = useCallback((langCode) => {
-    if (!voices || voices.length === 0) return null;
+    const currentVoices =
+      voices && voices.length > 0
+        ? voices
+        : typeof window !== 'undefined' && window.speechSynthesis
+        ? window.speechSynthesis.getVoices()
+        : [];
+
+    if (!currentVoices || currentVoices.length === 0) return null;
+
     const cleanLang = (langCode || 'en-US').toLowerCase();
     const primaryTag = cleanLang.split('-')[0];
     const aliases = LANG_ALIASES[cleanLang] || [cleanLang, primaryTag];
 
-    // 1. Try match against alias list
+    // 1. Try matching against alias list in voice.lang
     for (const alias of aliases) {
-      const found = voices.find((v) => {
-        const vLang = v.lang.toLowerCase().replace('_', '-');
+      const found = currentVoices.find((v) => {
+        const vLang = (v.lang || '').toLowerCase().replace('_', '-');
         return vLang === alias || vLang.startsWith(alias);
       });
       if (found) return found;
     }
 
-    // 2. Primary language match (e.g. "ta", "te", "ur", "fr", "es", "ru", "ja", "zh")
-    const primaryMatch = voices.find((v) =>
-      v.lang.toLowerCase().startsWith(primaryTag)
+    // 2. Match against voice names for languages where OS voices are named in English
+    const voiceNameKeywords = {
+      ta: ['tamil', 'valluvar', 'kalpana', 'india'],
+      te: ['telugu', 'mohan', 'chitra', 'india'],
+      ur: ['urdu', 'gulshan', 'salman', 'arabic', 'hindi', 'heera', 'india'],
+      or: ['odia', 'oriya', 'india'],
+      as: ['assamese', 'bengali', 'bangla', 'india'],
+      bn: ['bengali', 'bangla', 'bashkar', 'india'],
+      hi: ['hindi', 'heera', 'kalpana', 'swara', 'madhur', 'india'],
+      zh: ['chinese', 'mandarin', 'putonghua', 'huihui', 'yaoyao', 'kangkang'],
+      ja: ['japanese', 'haruka', 'ichiro', 'ayumi', 'sayaka'],
+      ru: ['russian', 'irina', 'pavel'],
+      fr: ['french', 'paul', 'julie', 'hortense'],
+      es: ['spanish', 'helena', 'laura', 'pablo', 'raul'],
+    };
+
+    const keywords = voiceNameKeywords[primaryTag];
+    if (keywords) {
+      for (const kw of keywords) {
+        const nameMatch = currentVoices.find((v) =>
+          (v.name || '').toLowerCase().includes(kw)
+        );
+        if (nameMatch) return nameMatch;
+      }
+    }
+
+    // 3. Match by primary language tag
+    const primaryMatch = currentVoices.find((v) =>
+      (v.lang || '').toLowerCase().startsWith(primaryTag)
     );
     if (primaryMatch) return primaryMatch;
 
-    // 3. For non-English languages, do NOT force English voices onto non-Latin or foreign text.
-    // Leaving voice unassigned allows modern browser speech engines to synthesize the language natively.
+    // 4. Phonetic sister language voice fallbacks
+    if (primaryTag === 'ur') {
+      const hindiVoice = currentVoices.find(
+        (v) =>
+          (v.lang || '').toLowerCase().startsWith('hi') ||
+          (v.name || '').toLowerCase().includes('hindi')
+      );
+      if (hindiVoice) return hindiVoice;
+    }
+
+    if (primaryTag === 'as') {
+      const bengaliVoice = currentVoices.find(
+        (v) =>
+          (v.lang || '').toLowerCase().startsWith('bn') ||
+          (v.name || '').toLowerCase().includes('bengali')
+      );
+      if (bengaliVoice) return bengaliVoice;
+    }
+
+    // 5. For non-English languages without matching voices, return null so utterance.lang is used directly
     if (primaryTag !== 'en') {
       return null;
     }
 
-    return voices.find((v) => v.default) || voices[0] || null;
+    return currentVoices.find((v) => v.default) || currentVoices[0] || null;
   }, [voices]);
 
   const speak = useCallback((text, langCode = 'en-US', options = {}) => {
@@ -181,74 +233,124 @@ export const useSpeechSynthesis = () => {
       return;
     }
 
-    // Cancel any ongoing speech before starting
+    // Unpause if stuck in paused state (Chromium bug fix)
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
     window.speechSynthesis.cancel();
 
     const spokenText =
       options.stripMarkdown !== false ? cleanMarkdownForSpeech(text) : text;
     if (!spokenText || !spokenText.trim()) return;
 
-    // Automatic language detection if text is in a distinct script / language
+    // Automatic language detection from text
     const detectedLang = detectScriptLanguage(spokenText);
     const effectiveLang =
       (langCode === 'en-US' || langCode === 'en-IN' || !langCode) && detectedLang
         ? detectedLang
         : langCode || 'en-US';
 
-    try {
-      const utterance = new SpeechSynthesisUtterance(spokenText);
-      utterance.lang = effectiveLang;
-      utterance.rate = options.rate || 1.0;
-      utterance.pitch = options.pitch || 1.0;
-      utterance.volume = options.volume || 1.0;
+    const cleanLang = effectiveLang.toLowerCase();
+    const fallbackTags = LANG_ALIASES[cleanLang] || [cleanLang, cleanLang.split('-')[0]];
 
-      const voice = findBestVoice(effectiveLang);
-      if (voice) {
-        utterance.voice = voice;
-      }
-
-      utterance.onstart = () => {
-        setIsSpeaking(true);
-        setIsPaused(false);
-        setCurrentText(text);
-      };
-
-      utterance.onend = () => {
-        setIsSpeaking(false);
-        setIsPaused(false);
-        setCurrentText('');
-      };
-
-      utterance.onerror = (event) => {
-        console.warn('[SpeechSynthesis Error]', event.error, 'for lang:', effectiveLang);
-        setIsSpeaking(false);
-        setIsPaused(false);
-        setCurrentText('');
-      };
-
-      utterance.onpause = () => {
-        setIsPaused(true);
-      };
-
-      utterance.onresume = () => {
-        setIsPaused(false);
-      };
-
-      utteranceRef.current = utterance;
-
-      // Small delay prevents race conditions with cancel() in Chrome/Edge
-      setTimeout(() => {
+    const trySpeak = (tagIndex = 0) => {
+      if (tagIndex >= fallbackTags.length) {
+        // Fallback: speak with default system voice so it never produces dead silence
         try {
-          window.speechSynthesis.speak(utterance);
-        } catch (e) {
-          console.warn('[SpeechSynthesis speak error]', e);
+          const genericUtterance = new SpeechSynthesisUtterance(spokenText);
+          genericUtterance.rate = options.rate || 1.0;
+          genericUtterance.pitch = options.pitch || 1.0;
+          genericUtterance.volume = options.volume || 1.0;
+          genericUtterance.onstart = () => {
+            setIsSpeaking(true);
+            setIsPaused(false);
+            setCurrentText(text);
+          };
+          genericUtterance.onend = () => {
+            setIsSpeaking(false);
+            setIsPaused(false);
+            setCurrentText('');
+          };
+          genericUtterance.onerror = (e) => {
+            console.warn('[SpeechSynthesis Final Error]', e.error);
+            setIsSpeaking(false);
+            setIsPaused(false);
+            setCurrentText('');
+          };
+          window.speechSynthesis.speak(genericUtterance);
+        } catch (err) {
+          console.warn('[SpeechSynthesis ultimate fail]', err);
           setIsSpeaking(false);
         }
-      }, 50);
-    } catch (err) {
-      console.error('Speech synthesis invocation failed:', err);
-      setIsSpeaking(false);
-    }
+        return;
+      }
+
+      const currentTag = fallbackTags[tagIndex];
+      try {
+        const utterance = new SpeechSynthesisUtterance(spokenText);
+        utterance.lang = currentTag;
+        utterance.rate = options.rate || 1.0;
+        utterance.pitch = options.pitch || 1.0;
+        utterance.volume = options.volume || 1.0;
+
+        const voice = findBestVoice(currentTag);
+        if (voice) {
+          utterance.voice = voice;
+        }
+
+        utterance.onstart = () => {
+          setIsSpeaking(true);
+          setIsPaused(false);
+          setCurrentText(text);
+        };
+
+        utterance.onend = () => {
+          setIsSpeaking(false);
+          setIsPaused(false);
+          setCurrentText('');
+        };
+
+        utterance.onerror = (event) => {
+          console.warn(`[SpeechSynthesis Error on ${currentTag}]`, event.error);
+          if (
+            event.error === 'language-not-supported' ||
+            event.error === 'synthesis-failed' ||
+            event.error === 'not-allowed'
+          ) {
+            // Attempt next fallback in chain
+            trySpeak(tagIndex + 1);
+          } else {
+            setIsSpeaking(false);
+            setIsPaused(false);
+            setCurrentText('');
+          }
+        };
+
+        utterance.onpause = () => {
+          setIsPaused(true);
+        };
+
+        utterance.onresume = () => {
+          setIsPaused(false);
+        };
+
+        utteranceRef.current = utterance;
+
+        setTimeout(() => {
+          try {
+            window.speechSynthesis.speak(utterance);
+          } catch (e) {
+            console.warn(`[SpeechSynthesis error on ${currentTag}]`, e);
+            trySpeak(tagIndex + 1);
+          }
+        }, 50);
+      } catch (err) {
+        console.warn(`[SpeechSynthesis exception on ${currentTag}]`, err);
+        trySpeak(tagIndex + 1);
+      }
+    };
+
+    trySpeak(0);
   }, [findBestVoice]);
 
   const pause = useCallback(() => {
