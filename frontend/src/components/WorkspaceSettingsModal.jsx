@@ -1756,4 +1756,57 @@ const styles = {
     color: 'var(--text-primary)',
     lineHeight: '1.5',
   },
+  workflowLogCard: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '12px 14px',
+    backgroundColor: 'var(--bg-card)',
+    border: '1px solid var(--border-light)',
+    borderRadius: 'var(--radius-sm, 6px)',
+    gap: '12px',
+  },
+  workflowLogId: {
+    fontSize: '10px',
+    fontFamily: 'monospace',
+    color: 'var(--text-muted)',
+    backgroundColor: 'var(--bg-hover)',
+    padding: '2px 4px',
+    borderRadius: '3px',
+  },
+  workflowLogDesc: {
+    margin: '4px 0 0 0',
+    fontSize: '12.5px',
+    color: 'var(--text-secondary)',
+  },
+  workflowLogTime: {
+    display: 'block',
+    marginTop: '4px',
+    fontSize: '10.5px',
+    color: 'var(--text-muted)',
+  },
+  workflowLogStatusBadge: (status) => {
+    const statusLower = (status || '').toLowerCase();
+    let bg = 'rgba(107, 114, 128, 0.1)';
+    let color = '#6b7280';
+    if (statusLower === 'confirmed' || statusLower === 'approved' || statusLower === 'resolved') {
+      bg = 'rgba(34, 197, 94, 0.1)';
+      color = 'var(--status-success, #22c55e)';
+    } else if (statusLower === 'cancelled' || statusLower === 'rejected' || statusLower === 'failed') {
+      bg = 'rgba(239, 68, 68, 0.1)';
+      color = 'var(--status-error, #ef4444)';
+    } else if (statusLower === 'pending' || statusLower === 'awaiting_approval') {
+      bg = 'rgba(245, 158, 11, 0.1)';
+      color = '#f59e0b';
+    }
+    return {
+      padding: '4px 8px',
+      borderRadius: '12px',
+      fontSize: '11px',
+      fontWeight: '600',
+      backgroundColor: bg,
+      color: color,
+      textTransform: 'uppercase',
+    };
+  },
 };
