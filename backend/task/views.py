@@ -8,12 +8,14 @@ from workspace.models import Workspace
 from workspace.permissions import IsAuthenticatedOr401
 from .models import (
     Task, Agent, TaskExecution, UserMCPServer,
-    CertificateRequest, MaintenanceTicket, LaboratoryBooking, GrievanceEscalation, InstitutionalPolicy
+    CertificateRequest, MaintenanceTicket, LaboratoryBooking, GrievanceEscalation, InstitutionalPolicy,
+    WorkspaceRequest, RequestEvent, WorkspaceNotification
 )
 from .serializers import (
     TaskSerializer, AgentSerializer, TaskExecutionSerializer, UserMCPServerSerializer,
     CertificateRequestSerializer, MaintenanceTicketSerializer, LaboratoryBookingSerializer, GrievanceEscalationSerializer,
-    InstitutionalPolicySerializer
+    InstitutionalPolicySerializer,
+    WorkspaceRequestSerializer, RequestEventSerializer, WorkspaceNotificationSerializer
 )
 from .permissions import IsWorkspaceMemberForTask
 from .services.task_service import TaskService
@@ -594,5 +596,331 @@ class InstitutionalPolicyViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         return super().destroy(request, *args, **kwargs)
+
+
+class WorkspaceRequestViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for viewing and submitting human-in-the-loop workspace requests.
+    Supports member filtering, status tabs [ongoing, approved, rejected], and search.
+    """
+    serializer_class = WorkspaceRequestSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        workspace_id = self.request.query_params.get('workspace_id')
+        if not workspace_id:
+            pk = self.kwargs.get('pk')
+            if pk:
+                try:
+                    obj = WorkspaceRequest.objects.get(pk=pk)
+                    workspace_id = obj.workspace_id
+                except (WorkspaceRequest.DoesNotExist, ValueError):
+                    return WorkspaceRequest.objects.none()
+            else:
+                return WorkspaceRequest.objects.none()
+
+        workspace = get_object_or_404(Workspace, id=workspace_id)
+        user = self.request.user
+
+        # Access check
+        if workspace.owner != user and not workspace.memberships.filter(user=user).exists():
+            return WorkspaceRequest.objects.none()
+
+        is_admin_or_owner = workspace.owner == user or workspace.memberships.filter(user=user, role='ADMIN').exists()
+        mine_only = self.request.query_params.get('mine') == 'true'
+
+        if is_admin_or_owner and not mine_only:
+            qs = WorkspaceRequest.objects.filter(workspace=workspace, is_archived=False)
+        else:
+            qs = WorkspaceRequest.objects.filter(workspace=workspace, requester=user, is_archived=False)
+
+        # Tab filtering
+        status_tab = self.request.query_params.get('status_tab')
+        if status_tab == 'ongoing':
+            qs = qs.filter(decision_status__in=['SUBMITTED', 'UNDER_REVIEW', 'ESCALATED'])
+        elif status_tab == 'approved':
+            qs = qs.filter(decision_status='APPROVED')
+        elif status_tab == 'rejected':
+            qs = qs.filter(decision_status='REJECTED')
+
+        # Type filtering
+        request_type = self.request.query_params.get('request_type')
+        if request_type:
+            qs = qs.filter(request_type=request_type)
+
+        # Search filtering
+        search = self.request.query_params.get('search')
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(display_id__icontains=search) |
+                Q(title__icontains=search) |
+                Q(description__icontains=search)
+            )
+
+        return qs.order_by('-created_at')
+
+    def create(self, request, *args, **kwargs):
+        from .services.request_service import RequestService
+        from django.core.exceptions import PermissionDenied, ValidationError
+
+        workspace_id = request.data.get('workspace_id') or request.data.get('workspace')
+        request_type = request.data.get('request_type', 'GENERAL')
+        title = request.data.get('title')
+        description = request.data.get('description', '')
+        payload = request.data.get('payload', {})
+
+        if not workspace_id or not title:
+            return Response(
+                {"error": "Both workspace_id and title are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        workspace = get_object_or_404(Workspace, id=workspace_id)
+
+        try:
+            req_obj = RequestService.create_request(
+                workspace=workspace,
+                requester=request.user,
+                request_type=request_type,
+                title=title,
+                description=description,
+                payload=payload
+            )
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": f"Failed to create request: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = self.get_serializer(req_obj)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive(self, request, pk=None):
+        from .services.request_service import RequestService
+        from django.core.exceptions import PermissionDenied
+
+        req_obj = get_object_or_404(WorkspaceRequest, id=pk)
+        try:
+            archived_req = RequestService.archive_request(req_obj, request.user)
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(archived_req)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ReviewCenterViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    API endpoints for Workspace Admins & Owners to review, escalate, approve, and reject requests.
+    Members and Viewers receive HTTP 403 Forbidden.
+    """
+    serializer_class = WorkspaceRequestSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        workspace_id = self.request.query_params.get('workspace_id')
+        if not workspace_id:
+            pk = self.kwargs.get('pk')
+            if pk:
+                try:
+                    obj = WorkspaceRequest.objects.get(pk=pk)
+                    workspace_id = obj.workspace_id
+                except (WorkspaceRequest.DoesNotExist, ValueError):
+                    return WorkspaceRequest.objects.none()
+            else:
+                return WorkspaceRequest.objects.none()
+
+        workspace = get_object_or_404(Workspace, id=workspace_id)
+        user = self.request.user
+
+        is_admin_or_owner = workspace.owner == user or workspace.memberships.filter(user=user, role='ADMIN').exists()
+        if not is_admin_or_owner:
+            return WorkspaceRequest.objects.none()
+
+        qs = WorkspaceRequest.objects.filter(workspace=workspace, is_archived=False)
+
+        queue = self.request.query_params.get('queue', 'pending')
+        if queue == 'pending':
+            qs = qs.filter(decision_status__in=['SUBMITTED', 'UNDER_REVIEW'])
+        elif queue == 'escalated':
+            qs = qs.filter(decision_status='ESCALATED')
+        elif queue == 'history':
+            qs = qs.filter(decision_status__in=['APPROVED', 'REJECTED'])
+
+        request_type = self.request.query_params.get('request_type')
+        if request_type:
+            qs = qs.filter(request_type=request_type)
+
+        search = self.request.query_params.get('search')
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(display_id__icontains=search) |
+                Q(title__icontains=search) |
+                Q(description__icontains=search) |
+                Q(requester__username__icontains=search)
+            )
+
+        return qs.order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        workspace_id = request.query_params.get('workspace_id')
+        if not workspace_id:
+            return Response({"error": "workspace_id query parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+        workspace = get_object_or_404(Workspace, id=workspace_id)
+        is_admin_or_owner = workspace.owner == request.user or workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+        if not is_admin_or_owner:
+            return Response({"error": "Permission Denied: Review Center is restricted to workspace ADMIN and OWNER."}, status=status.HTTP_403_FORBIDDEN)
+        return super().list(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'], url_path='start-review')
+    def start_review(self, request, pk=None):
+        from .services.request_service import RequestService
+        from django.core.exceptions import PermissionDenied
+
+        req_obj = get_object_or_404(WorkspaceRequest, id=pk)
+        try:
+            reviewed_req = RequestService.start_review(req_obj, request.user)
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(reviewed_req)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='escalate')
+    def escalate(self, request, pk=None):
+        from .services.request_service import RequestService
+        from django.core.exceptions import PermissionDenied, ValidationError
+
+        req_obj = get_object_or_404(WorkspaceRequest, id=pk)
+        reason = request.data.get('reason')
+
+        if not reason or not reason.strip():
+            return Response({"error": "An escalation reason is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            escalated_req = RequestService.escalate_request(req_obj, request.user, reason)
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = self.get_serializer(escalated_req)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        from .services.request_service import RequestService
+        from django.core.exceptions import PermissionDenied, ValidationError
+
+        req_obj = get_object_or_404(WorkspaceRequest, id=pk)
+        reason = request.data.get('reason', '')
+
+        try:
+            approved_req = RequestService.approve_request(req_obj, request.user, reason)
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = self.get_serializer(approved_req)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        from .services.request_service import RequestService
+        from django.core.exceptions import PermissionDenied, ValidationError
+
+        req_obj = get_object_or_404(WorkspaceRequest, id=pk)
+        reason = request.data.get('reason')
+
+        if not reason or not reason.strip():
+            return Response({"error": "A rejection reason is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            rejected_req = RequestService.reject_request(req_obj, request.user, reason)
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = self.get_serializer(rejected_req)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class WorkspaceNotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    API endpoints for querying and managing user notifications within an active workspace.
+    """
+    serializer_class = WorkspaceNotificationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        workspace_id = self.request.query_params.get('workspace_id')
+        if not workspace_id:
+            return WorkspaceNotification.objects.none()
+
+        workspace = get_object_or_404(Workspace, id=workspace_id)
+        user = self.request.user
+
+        if workspace.owner != user and not workspace.memberships.filter(user=user).exists():
+            return WorkspaceNotification.objects.none()
+
+        qs = WorkspaceNotification.objects.filter(workspace=workspace, recipient=user)
+        if self.request.query_params.get('unread_only') == 'true':
+            qs = qs.filter(is_read=False)
+        return qs.order_by('-created_at')
+
+    @action(detail=False, methods=['get'], url_path='unread-count')
+    def unread_count(self, request):
+        from .services.notification_service import NotificationService
+
+        workspace_id = request.query_params.get('workspace_id')
+        if not workspace_id:
+            return Response({"error": "workspace_id query parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        workspace = get_object_or_404(Workspace, id=workspace_id)
+        if workspace.owner != request.user and not workspace.memberships.filter(user=request.user).exists():
+            return Response({"error": "You do not have access to this workspace."}, status=status.HTTP_403_FORBIDDEN)
+
+        count = NotificationService.get_unread_count(workspace, request.user)
+        return Response({"unread_count": count}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='read')
+    def mark_read(self, request, pk=None):
+        from .services.notification_service import NotificationService
+
+        notif = get_object_or_404(WorkspaceNotification, id=pk, recipient=request.user)
+        NotificationService.mark_as_read(str(notif.id), request.user)
+        return Response({"success": True}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='mark-all-read')
+    def mark_all_read(self, request):
+        from .services.notification_service import NotificationService
+
+        workspace_id = request.data.get('workspace_id') or request.query_params.get('workspace_id')
+        if not workspace_id:
+            return Response({"error": "workspace_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        workspace = get_object_or_404(Workspace, id=workspace_id)
+        if workspace.owner != request.user and not workspace.memberships.filter(user=request.user).exists():
+            return Response({"error": "You do not have access to this workspace."}, status=status.HTTP_403_FORBIDDEN)
+
+        cleared_count = NotificationService.mark_all_as_read(workspace, request.user)
+        return Response({"success": True, "cleared_count": cleared_count}, status=status.HTTP_200_OK)
+
 
 

@@ -5,6 +5,9 @@ import ThemeToggle from '../components/ThemeToggle';
 import Notes from './Notes.jsx';
 import SettingsTab from '../components/SettingsTab';
 import DMAgentTab from '../components/DMAgentTab';
+import MyRequestsTab from '../components/MyRequestsTab';
+import ReviewCenterTab from '../components/ReviewCenterTab';
+import NotificationCenter from '../components/NotificationCenter';
 import WorkspaceSettingsModal from '../components/WorkspaceSettingsModal';
 import WorkspaceMembersModal from '../components/WorkspaceMembersModal';
 import MarkdownRenderer from '../components/MarkdownRenderer';
@@ -35,13 +38,16 @@ import {
   MessageSquare,
   ShieldAlert,
   ShieldCheck,
-  ShieldX
+  ShieldX,
+  Inbox,
+  FileCheck
 } from 'lucide-react';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('Workspaces');
+  const [selectedRequestId, setSelectedRequestId] = useState(null);
 
   // Real-time states representing workspaces
   const [workspaces, setWorkspaces] = useState([]);
@@ -513,6 +519,8 @@ export default function Dashboard() {
             { name: 'Spreadsheets', icon: Table },
             { name: 'Notes', icon: FileText },
             { name: 'Tasks', icon: ClipboardList },
+            { name: 'My Requests', icon: Inbox },
+            ...(isOwnerOrAdmin ? [{ name: 'Review Center', icon: ShieldCheck }] : []),
             { name: 'DM Agent', icon: MessageSquare },
             { name: 'Shared Files', icon: FolderOpen },
             { name: 'Settings', icon: Settings }
@@ -564,6 +572,21 @@ export default function Dashboard() {
           </div>
 
           <div style={styles.headerRight}>
+            <NotificationCenter 
+              workspaceId={activeWorkspaceId} 
+              onSelectRequest={(reqId, notifType) => {
+                setSelectedRequestId(reqId);
+                if (notifType === 'REQUEST_ESCALATED' || notifType === 'NEW_REQUEST') {
+                  if (isOwnerOrAdmin) {
+                    setActiveTab('Review Center');
+                  } else {
+                    setActiveTab('My Requests');
+                  }
+                } else {
+                  setActiveTab('My Requests');
+                }
+              }} 
+            />
             <ThemeToggle />
             <div style={styles.profileBadge}>{firstName.substring(0, 2).toUpperCase()}</div>
           </div>
@@ -1484,6 +1507,34 @@ export default function Dashboard() {
                 })()
               )}
             </div>
+          ) : activeTab === 'My Requests' ? (
+            !activeWorkspaceId ? (
+              <div style={styles.emptyTabPanel}>
+                <Inbox size={36} strokeWidth={1.25} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
+                <h3 style={styles.emptyPanelTitle}>No Workspace Selected</h3>
+                <p style={styles.emptyPanelText}>Please select or create an active workspace first to manage requests.</p>
+              </div>
+            ) : (
+              <MyRequestsTab 
+                workspace={activeWs} 
+                isViewer={isViewerRole} 
+                initialRequestId={selectedRequestId} 
+              />
+            )
+          ) : activeTab === 'Review Center' ? (
+            !activeWorkspaceId ? (
+              <div style={styles.emptyTabPanel}>
+                <ShieldCheck size={36} strokeWidth={1.25} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
+                <h3 style={styles.emptyPanelTitle}>No Workspace Selected</h3>
+                <p style={styles.emptyPanelText}>Please select or create an active workspace first to access the Review Center.</p>
+              </div>
+            ) : (
+              <ReviewCenterTab 
+                workspace={activeWs} 
+                userRole={activeWsRole} 
+                initialRequestId={selectedRequestId} 
+              />
+            )
           ) : activeTab === 'Settings' ? (
             <SettingsTab activeWorkspaceId={activeWorkspaceId} onWorkspaceUpdated={fetchWorkspaces} />
           ) : activeTab === 'DM Agent' ? (

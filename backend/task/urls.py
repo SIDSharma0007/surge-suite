@@ -4,12 +4,16 @@ from .views import (
     TaskViewSet, AgentViewSet, ProviderSettingsView, ProviderSettingsDetailView,
     BuiltinMCPServerListView, UserMCPServerViewSet,
     CertificateRequestViewSet, MaintenanceTicketViewSet, LaboratoryBookingViewSet, GrievanceEscalationViewSet,
-    InstitutionalPolicyViewSet
+    InstitutionalPolicyViewSet,
+    WorkspaceRequestViewSet, ReviewCenterViewSet, WorkspaceNotificationViewSet
 )
 
 router = DefaultRouter()
 router.register(r'tasks', TaskViewSet, basename='task')
 router.register(r'agents', AgentViewSet, basename='agent')
+router.register(r'requests', WorkspaceRequestViewSet, basename='workspace-requests')
+router.register(r'review-center', ReviewCenterViewSet, basename='review-center')
+router.register(r'notifications', WorkspaceNotificationViewSet, basename='workspace-notifications')
 router.register(r'mcp/custom', UserMCPServerViewSet, basename='mcp-custom')
 router.register(r'mcp/policies', InstitutionalPolicyViewSet, basename='mcp-policies')
 router.register(r'workflows/certificates', CertificateRequestViewSet, basename='workflow-certificates')

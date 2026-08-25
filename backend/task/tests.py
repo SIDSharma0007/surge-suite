@@ -4280,6 +4280,475 @@ class TaskRoleBasedAccessControlTestCase(TestCase):
         self.assertEqual(len(res_admin.data), 2)
 
 
+class WorkspaceRequestModelAndSerializerTestCase(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner_req", password="password")
+        self.admin = User.objects.create_user(username="admin_req", password="password")
+        self.member = User.objects.create_user(username="member_req", password="password")
+        self.workspace = Workspace.objects.create(name="Req Workspace", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.admin, role="ADMIN")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role="MEMBER")
+
+    def test_display_id_auto_generation(self):
+        from task.models import WorkspaceRequest
+        req1 = WorkspaceRequest.objects.create(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="CERTIFICATE",
+            title="Bonafide Certificate"
+        )
+        self.assertTrue(req1.display_id.startswith("REQ-"))
+        self.assertTrue(req1.display_id.endswith("000001"))
+
+        req2 = WorkspaceRequest.objects.create(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="LAB_BOOKING",
+            title="Chemistry Lab Booking"
+        )
+        self.assertTrue(req2.display_id.startswith("REQ-"))
+        self.assertTrue(req2.display_id.endswith("000002"))
+
+    def test_request_event_and_serializer(self):
+        from task.models import WorkspaceRequest, RequestEvent
+        from task.serializers import WorkspaceRequestSerializer
+        from django.test import RequestFactory
+
+        req = WorkspaceRequest.objects.create(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="MAINTENANCE",
+            title="AC Repair in Lab 3",
+            decision_status="SUBMITTED"
+        )
+        # Public event
+        RequestEvent.objects.create(
+            request=req,
+            actor=self.member,
+            actor_role="MEMBER",
+            event_type="CREATED",
+            from_status="",
+            to_status="SUBMITTED",
+            message="Request submitted by member.",
+            is_internal=False
+        )
+        # Internal admin event
+        RequestEvent.objects.create(
+            request=req,
+            actor=self.admin,
+            actor_role="ADMIN",
+            event_type="REVIEW_STARTED",
+            from_status="SUBMITTED",
+            to_status="UNDER_REVIEW",
+            message="Internal notes for admin review.",
+            is_internal=True
+        )
+
+        factory = RequestFactory()
+
+        # Serializing as Member (internal event should be hidden)
+        request_member = factory.get('/')
+        request_member.user = self.member
+        ser_member = WorkspaceRequestSerializer(req, context={'request': request_member})
+        self.assertEqual(len(ser_member.data['timeline_events']), 1)
+        self.assertEqual(ser_member.data['timeline_events'][0]['event_type'], "CREATED")
+
+        # Serializing as Admin (all events visible)
+        request_admin = factory.get('/')
+        request_admin.user = self.admin
+        ser_admin = WorkspaceRequestSerializer(req, context={'request': request_admin})
+        self.assertEqual(len(ser_admin.data['timeline_events']), 2)
+
+    def test_notification_model_and_serializer(self):
+        from task.models import WorkspaceNotification, WorkspaceRequest
+        from task.serializers import WorkspaceNotificationSerializer
+
+        req = WorkspaceRequest.objects.create(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="GRIEVANCE",
+            title="Hostel Water Issue"
+        )
+        notif = WorkspaceNotification.objects.create(
+            workspace=self.workspace,
+            recipient=self.member,
+            request=req,
+            notification_type="REQUEST_APPROVED",
+            title="Request Approved",
+            message="Your hostel grievance has been approved."
+        )
+        ser = WorkspaceNotificationSerializer(notif)
+        self.assertEqual(ser.data['request_display_id'], req.display_id)
+        self.assertEqual(ser.data['is_read'], False)
+        self.assertEqual(ser.data['notification_type'], "REQUEST_APPROVED")
+
+
+class RequestServiceAndNotificationServiceTestCase(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner_srv", password="password")
+        self.admin = User.objects.create_user(username="admin_srv", password="password")
+        self.member = User.objects.create_user(username="member_srv", password="password")
+        self.viewer = User.objects.create_user(username="viewer_srv", password="password")
+        self.outsider = User.objects.create_user(username="outsider_srv", password="password")
+
+        self.workspace = Workspace.objects.create(name="Service Test Workspace", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.admin, role="ADMIN")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role="MEMBER")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.viewer, role="VIEWER")
+
+    def test_request_lifecycle_full_flow(self):
+        from task.services.request_service import RequestService, RequestStateError
+        from task.services.notification_service import NotificationService
+        from django.core.exceptions import PermissionDenied
+
+        # 1. Member creates request
+        req = RequestService.create_request(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="CERTIFICATE",
+            title="Bonafide Certificate for Visa",
+            description="Need certificate signed for German visa.",
+            payload={"type": "bonafide", "purpose": "visa"}
+        )
+        self.assertEqual(req.decision_status, 'SUBMITTED')
+        self.assertEqual(req.execution_status, 'NOT_STARTED')
+        self.assertEqual(req.timeline_events.count(), 1)
+        self.assertEqual(req.timeline_events.first().event_type, 'CREATED')
+
+        # Admin and Owner should have received notifications
+        self.assertEqual(NotificationService.get_unread_count(self.workspace, self.admin), 1)
+        self.assertEqual(NotificationService.get_unread_count(self.workspace, self.owner), 1)
+        self.assertEqual(NotificationService.get_unread_count(self.workspace, self.member), 0)
+
+        # 2. Admin starts review
+        req = RequestService.start_review(req, reviewer=self.admin)
+        self.assertEqual(req.decision_status, 'UNDER_REVIEW')
+        self.assertEqual(req.reviewer, self.admin)
+        self.assertEqual(req.timeline_events.count(), 2)
+
+        # 3. Admin escalates to Owner with reason
+        req = RequestService.escalate_request(
+            req, actor=self.admin, reason="Needs Dean/Owner sign-off due to international travel."
+        )
+        self.assertEqual(req.decision_status, 'ESCALATED')
+        self.assertEqual(req.escalated_by, self.admin)
+        self.assertEqual(req.escalation_reason, "Needs Dean/Owner sign-off due to international travel.")
+
+        # Owner should have received escalation notification
+        self.assertEqual(NotificationService.get_unread_count(self.workspace, self.owner), 2)
+
+        # 4. Member tries to approve -> PermissionDenied
+        with self.assertRaises(PermissionDenied):
+            RequestService.approve_request(req, actor=self.member)
+
+        # 5. Owner approves request
+        req = RequestService.approve_request(
+            req, actor=self.owner, reason="Approved with official seal."
+        )
+        self.assertEqual(req.decision_status, 'APPROVED')
+        self.assertEqual(req.reviewer, self.owner)
+        self.assertEqual(req.decision_reason, "Approved with official seal.")
+
+        # Requester receives approval notification
+        self.assertEqual(NotificationService.get_unread_count(self.workspace, self.member), 1)
+
+        # 6. Cannot re-approve or reject an already approved request (terminal state)
+        with self.assertRaises(RequestStateError):
+            RequestService.reject_request(req, actor=self.owner, reason="Changed mind")
+
+        # 7. Record execution start and evidence
+        req = RequestService.record_execution_start(req, actor=self.admin)
+        self.assertEqual(req.execution_status, 'RUNNING')
+
+        evidence_payload = {
+            "certificate_number": "CERT-2026-9912",
+            "signed_by": "Dean of Academics",
+            "download_url": "/api/v1/certificates/CERT-2026-9912.pdf"
+        }
+        req = RequestService.record_execution_evidence(
+            req, evidence=evidence_payload, result={"status": "issued"}, success=True, actor=self.admin
+        )
+        self.assertEqual(req.execution_status, 'COMPLETED')
+        self.assertEqual(req.execution_evidence["certificate_number"], "CERT-2026-9912")
+
+        # Member receives completion notification
+        self.assertEqual(NotificationService.get_unread_count(self.workspace, self.member), 2)
+
+        # 8. Notification mark all as read
+        cleared = NotificationService.mark_all_as_read(self.workspace, self.member)
+        self.assertEqual(cleared, 2)
+        self.assertEqual(NotificationService.get_unread_count(self.workspace, self.member), 0)
+
+    def test_rejection_flow_and_permission_enforcement(self):
+        from task.services.request_service import RequestService, RequestStateError
+        from django.core.exceptions import PermissionDenied
+
+        req = RequestService.create_request(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="MAINTENANCE",
+            title="Broken Light in Room 402"
+        )
+
+        # Viewer trying to reject -> PermissionDenied
+        with self.assertRaises(PermissionDenied):
+            RequestService.reject_request(req, actor=self.viewer, reason="Denied")
+
+        # Rejection without reason -> RequestStateError
+        with self.assertRaises(RequestStateError):
+            RequestService.reject_request(req, actor=self.admin, reason="")
+
+        # Admin rejects with reason
+        req = RequestService.reject_request(req, actor=self.admin, reason="Duplicate ticket already exists (TKT-004).")
+        self.assertEqual(req.decision_status, 'REJECTED')
+        self.assertEqual(req.decision_reason, "Duplicate ticket already exists (TKT-004).")
+
+        # Cannot execute rejected request
+        with self.assertRaises(RequestStateError):
+            RequestService.record_execution_start(req, actor=self.admin)
+
+        # Viewer cannot submit request
+        with self.assertRaises(PermissionDenied):
+            RequestService.create_request(
+                workspace=self.workspace,
+                requester=self.viewer,
+                request_type="GENERAL",
+                title="Viewer request"
+            )
+
+        # Outsider cannot submit request
+        with self.assertRaises(PermissionDenied):
+            RequestService.create_request(
+                workspace=self.workspace,
+                requester=self.outsider,
+                request_type="GENERAL",
+                title="Outsider request"
+            )
+
+
+class WorkspaceRequestAPITestCase(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        self.client = APIClient()
+        self.owner = User.objects.create_user(username="owner_api", password="password")
+        self.admin = User.objects.create_user(username="admin_api", password="password")
+        self.member = User.objects.create_user(username="member_api", password="password")
+        self.viewer = User.objects.create_user(username="viewer_api", password="password")
+
+        self.workspace = Workspace.objects.create(name="API Test Workspace", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.admin, role="ADMIN")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role="MEMBER")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.viewer, role="VIEWER")
+
+    def test_request_crud_and_status_tabs(self):
+        from task.models import WorkspaceRequest
+
+        # Member creates request via API
+        self.client.force_authenticate(user=self.member)
+        res_create = self.client.post('/api/v1/requests/', {
+            "workspace_id": str(self.workspace.id),
+            "request_type": "CERTIFICATE",
+            "title": "NOC for Internship",
+            "description": "Required by employer",
+            "payload": {"company": "Google"}
+        }, format='json')
+        self.assertEqual(res_create.status_code, 201)
+        req_id = res_create.data["id"]
+        self.assertTrue(res_create.data["display_id"].startswith("REQ-"))
+
+        # Viewer tries to create -> 403 Forbidden
+        self.client.force_authenticate(user=self.viewer)
+        res_viewer = self.client.post('/api/v1/requests/', {
+            "workspace_id": str(self.workspace.id),
+            "title": "Viewer Request"
+        }, format='json')
+        self.assertEqual(res_viewer.status_code, 403)
+
+        # Member lists with ongoing tab (should see 1 item)
+        self.client.force_authenticate(user=self.member)
+        res_list = self.client.get(f'/api/v1/requests/?workspace_id={self.workspace.id}&status_tab=ongoing')
+        self.assertEqual(res_list.status_code, 200)
+        self.assertEqual(len(res_list.data), 1)
+
+        # Member lists with approved tab (should see 0 items)
+        res_approved = self.client.get(f'/api/v1/requests/?workspace_id={self.workspace.id}&status_tab=approved')
+        self.assertEqual(res_approved.status_code, 200)
+        self.assertEqual(len(res_approved.data), 0)
+
+        # Retrieve request details
+        res_detail = self.client.get(f'/api/v1/requests/{req_id}/')
+        self.assertEqual(res_detail.status_code, 200)
+        self.assertEqual(res_detail.data["title"], "NOC for Internship")
+
+        # Member tries to archive -> 403 Forbidden
+        res_arch_mem = self.client.post(f'/api/v1/requests/{req_id}/archive/')
+        self.assertEqual(res_arch_mem.status_code, 403)
+
+        # Owner archives -> 200 OK
+        self.client.force_authenticate(user=self.owner)
+        res_arch_owner = self.client.post(f'/api/v1/requests/{req_id}/archive/')
+        self.assertEqual(res_arch_owner.status_code, 200)
+        self.assertTrue(res_arch_owner.data["is_archived"])
+
+
+class ReviewCenterAPITestCase(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        self.client = APIClient()
+        self.owner = User.objects.create_user(username="owner_rc", password="password")
+        self.admin = User.objects.create_user(username="admin_rc", password="password")
+        self.member = User.objects.create_user(username="member_rc", password="password")
+
+        self.workspace = Workspace.objects.create(name="Review Center Workspace", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.admin, role="ADMIN")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role="MEMBER")
+
+    def test_review_center_rbac_and_actions(self):
+        from task.services.request_service import RequestService
+
+        req = RequestService.create_request(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="MAINTENANCE",
+            title="Lab Projector Malfunction"
+        )
+
+        # Member receives 403 on Review Center
+        self.client.force_authenticate(user=self.member)
+        res_mem = self.client.get(f'/api/v1/review-center/?workspace_id={self.workspace.id}')
+        self.assertEqual(res_mem.status_code, 403)
+
+        # Admin lists pending queue -> sees 1 request
+        self.client.force_authenticate(user=self.admin)
+        res_admin = self.client.get(f'/api/v1/review-center/?workspace_id={self.workspace.id}&queue=pending')
+        self.assertEqual(res_admin.status_code, 200)
+        self.assertEqual(len(res_admin.data), 1)
+
+        # Admin starts review
+        res_start = self.client.post(f'/api/v1/review-center/{req.id}/start-review/')
+        self.assertEqual(res_start.status_code, 200)
+        self.assertEqual(res_start.data["decision_status"], "UNDER_REVIEW")
+
+        # Admin escalates with reason
+        res_esc = self.client.post(f'/api/v1/review-center/{req.id}/escalate/', {
+            "reason": "Requires high-value hardware budget replacement."
+        }, format='json')
+        self.assertEqual(res_esc.status_code, 200)
+        self.assertEqual(res_esc.data["decision_status"], "ESCALATED")
+
+        # Owner lists escalated queue -> sees 1 request
+        self.client.force_authenticate(user=self.owner)
+        res_esc_list = self.client.get(f'/api/v1/review-center/?workspace_id={self.workspace.id}&queue=escalated')
+        self.assertEqual(res_esc_list.status_code, 200)
+        self.assertEqual(len(res_esc_list.data), 1)
+
+        # Owner approves request
+        res_appr = self.client.post(f'/api/v1/review-center/{req.id}/approve/', {
+            "reason": "Approved from department tech fund."
+        }, format='json')
+        self.assertEqual(res_appr.status_code, 200)
+        self.assertEqual(res_appr.data["decision_status"], "APPROVED")
+
+        # History queue now has 1 item
+        res_hist = self.client.get(f'/api/v1/review-center/?workspace_id={self.workspace.id}&queue=history')
+        self.assertEqual(res_hist.status_code, 200)
+        self.assertEqual(len(res_hist.data), 1)
+
+
+class WorkspaceNotificationAPITestCase(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        self.client = APIClient()
+        self.owner = User.objects.create_user(username="owner_notif", password="password")
+        self.member = User.objects.create_user(username="member_notif", password="password")
+        self.workspace = Workspace.objects.create(name="Notification WS", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role="MEMBER")
+
+    def test_notification_apis(self):
+        from task.services.notification_service import NotificationService
+
+        NotificationService.notify_user(
+            workspace=self.workspace,
+            recipient=self.member,
+            notification_type="GENERAL",
+            title="System Maintenance",
+            message="Scheduled tonight"
+        )
+        NotificationService.notify_user(
+            workspace=self.workspace,
+            recipient=self.member,
+            notification_type="REQUEST_APPROVED",
+            title="Request Approved",
+            message="Your leave request is approved"
+        )
+
+        self.client.force_authenticate(user=self.member)
+
+        # Unread count -> 2
+        res_count = self.client.get(f'/api/v1/notifications/unread-count/?workspace_id={self.workspace.id}')
+        self.assertEqual(res_count.status_code, 200)
+        self.assertEqual(res_count.data["unread_count"], 2)
+
+        # List notifications
+        res_list = self.client.get(f'/api/v1/notifications/?workspace_id={self.workspace.id}')
+        self.assertEqual(res_list.status_code, 200)
+        self.assertEqual(len(res_list.data), 2)
+        first_id = res_list.data[0]["id"]
+
+        # Mark single as read
+        res_read = self.client.post(f'/api/v1/notifications/{first_id}/read/')
+        self.assertEqual(res_read.status_code, 200)
+
+        # Unread count -> 1
+        res_count_after = self.client.get(f'/api/v1/notifications/unread-count/?workspace_id={self.workspace.id}')
+        self.assertEqual(res_count_after.data["unread_count"], 1)
+
+        # Mark all as read
+        res_all = self.client.post('/api/v1/notifications/mark-all-read/', {
+            "workspace_id": str(self.workspace.id)
+        }, format='json')
+        self.assertEqual(res_all.status_code, 200)
+
+        # Unread count -> 0
+        res_count_final = self.client.get(f'/api/v1/notifications/unread-count/?workspace_id={self.workspace.id}')
+        self.assertEqual(res_count_final.data["unread_count"], 0)
+
+
+class RequestAgentCapabilitiesTestCase(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner_cap", password="password")
+        self.member = User.objects.create_user(username="member_cap", password="password")
+        self.workspace = Workspace.objects.create(name="Cap WS", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role="MEMBER")
+
+    def test_capability_registry_request_tools(self):
+        from task.services.capability_registry import CapabilityRegistry
+        from task.services.request_service import RequestService
+
+        req = RequestService.create_request(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="LAB_BOOKING",
+            title="Physics Darkroom Slot"
+        )
+
+        registry = CapabilityRegistry(user=self.member, workspace=self.workspace)
+
+        # Test list_my_requests
+        list_res = registry.execute_tool("requests.list_my_requests", {"status_filter": "ongoing"})
+        self.assertEqual(list_res["count"], 1)
+        self.assertEqual(list_res["requests"][0]["display_id"], req.display_id)
+
+        # Test get_request_details by display_id
+        detail_res = registry.execute_tool("requests.get_request_details", {"request_id": req.display_id})
+        self.assertEqual(detail_res["title"], "Physics Darkroom Slot")
+        self.assertEqual(detail_res["decision_status"], "SUBMITTED")
+        self.assertEqual(len(detail_res["timeline"]), 1)
+
+
+
+
+
 
 
 
