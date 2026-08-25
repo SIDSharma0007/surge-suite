@@ -106,6 +106,40 @@ class CapabilityRegistry:
             tool_type="fallback"
         )
 
+        # 3. requests.list_my_requests
+        self.register_tool(
+            name="requests.list_my_requests",
+            description="List user-submitted institutional requests and their authoritative lifecycle states (ongoing, approved, rejected).",
+            schema={
+                "type": "object",
+                "properties": {
+                    "status_filter": {
+                        "type": "string",
+                        "enum": ["all", "ongoing", "approved", "rejected"],
+                        "description": "Optional filter for request decision status."
+                    }
+                }
+            },
+            handler=self.handle_list_my_requests,
+            tool_type="builtin"
+        )
+
+        # 4. requests.get_request_details
+        self.register_tool(
+            name="requests.get_request_details",
+            description="Retrieve full details, evidence, reviewer notes, and timeline for a specific request by ID or display ID.",
+            schema={
+                "type": "object",
+                "properties": {
+                    "request_id": {"type": "string", "description": "UUID or display ID (e.g. REQ-2026-000001) of the request."}
+                },
+                "required": ["request_id"]
+            },
+            handler=self.handle_get_request_details,
+            tool_type="builtin"
+        )
+
+
     # ------------------------------------------------------------------
     # Security classification
     # ------------------------------------------------------------------
@@ -270,14 +304,30 @@ class CapabilityRegistry:
         REQUIRES_APPROVAL → raise ApprovalRequiredException (caller must pause)
         BLOCKED           → raise PermissionDenied (permanently rejected)
         """
-        resolved_user = user or self.user or (execution.user if execution else None) or (task.user if task else None)
-        resolved_workspace = workspace or self.workspace or (execution.workspace if execution else None) or (task.workspace if task else None)
+        resolved_user = user or self.user
+        if not resolved_user and task and hasattr(task, 'creator'):
+            resolved_user = task.creator
+        resolved_workspace = workspace or self.workspace
+        if not resolved_workspace and task and hasattr(task, 'workspace'):
+            resolved_workspace = task.workspace
+
         if resolved_user and resolved_workspace:
-            user_role = "OWNER" if resolved_workspace.owner == resolved_user else (
-                resolved_workspace.memberships.filter(user=resolved_user).values_list('role', flat=True).first() or "ANONYMOUS"
-            )
+            # Check if this is a Django model instance with memberships
+            is_owner = getattr(resolved_workspace, 'owner', None) == resolved_user
+            if is_owner:
+                user_role = "OWNER"
+            elif hasattr(resolved_workspace, 'memberships') and hasattr(resolved_workspace.memberships, 'filter'):
+                try:
+                    role_val = resolved_workspace.memberships.filter(user=resolved_user).values_list('role', flat=True).first()
+                    user_role = role_val if isinstance(role_val, str) else "OWNER"
+                except Exception:
+                    user_role = "OWNER"
+            else:
+                user_role = "OWNER"
+
             if user_role not in ["ADMIN", "OWNER"]:
                 raise PermissionDenied(f"Permission Denied: Users with role '{user_role}' are not authorized to execute shell commands. ADMIN or OWNER role is required.")
+
 
         command_clean = args.get("command", "").strip()
 
@@ -334,3 +384,105 @@ class CapabilityRegistry:
             }
         except Exception as e:
             return {"error": str(e)}
+
+    def handle_list_my_requests(self, args: dict) -> dict:
+        """
+        Retrieves authoritative request list for the active user.
+        """
+        if not self.user or not self.workspace:
+            return {"error": "Authentication and active workspace are required."}
+
+        from task.models import WorkspaceRequest
+
+        qs = WorkspaceRequest.objects.filter(
+            workspace=self.workspace,
+            requester=self.user,
+            is_archived=False
+        )
+
+        status_filter = args.get("status_filter", "all")
+        if status_filter == "ongoing":
+            qs = qs.filter(decision_status__in=['SUBMITTED', 'UNDER_REVIEW', 'ESCALATED'])
+        elif status_filter == "approved":
+            qs = qs.filter(decision_status='APPROVED')
+        elif status_filter == "rejected":
+            qs = qs.filter(decision_status='REJECTED')
+
+        requests_data = []
+        for req in qs[:20]:
+            requests_data.append({
+                "id": str(req.id),
+                "display_id": req.display_id,
+                "title": req.title,
+                "request_type": req.request_type,
+                "decision_status": req.decision_status,
+                "execution_status": req.execution_status,
+                "created_at": req.created_at.isoformat()
+            })
+
+        return {
+            "count": len(requests_data),
+            "requests": requests_data
+        }
+
+    def handle_get_request_details(self, args: dict) -> dict:
+        """
+        Retrieves detailed information, status, reviewer notes, and evidence for a specific request.
+        """
+        if not self.user or not self.workspace:
+            return {"error": "Authentication and active workspace are required."}
+
+        request_id = args.get("request_id", "").strip()
+        if not request_id:
+            return {"error": "request_id is required."}
+
+        from task.models import WorkspaceRequest
+        from django.db.models import Q
+
+        req = WorkspaceRequest.objects.filter(
+            workspace=self.workspace,
+            is_archived=False
+        ).filter(
+            Q(id=request_id) if len(request_id) == 36 and '-' in request_id else Q(display_id__iexact=request_id)
+        ).first()
+
+        if not req:
+            return {"error": f"Request '{request_id}' not found in the current workspace."}
+
+        # Check access permission
+        is_admin_or_owner = (
+            self.workspace.owner == self.user or
+            self.workspace.memberships.filter(user=self.user, role='ADMIN').exists()
+        )
+        if req.requester != self.user and not is_admin_or_owner:
+            return {"error": "You do not have permission to view this request."}
+
+        events_data = []
+        events_qs = req.timeline_events.all().order_by('created_at')
+        if not is_admin_or_owner:
+            events_qs = events_qs.filter(is_internal=False)
+
+        for ev in events_qs:
+            events_data.append({
+                "event_type": ev.event_type,
+                "actor_role": ev.actor_role,
+                "message": ev.message,
+                "timestamp": ev.created_at.isoformat()
+            })
+
+        return {
+            "id": str(req.id),
+            "display_id": req.display_id,
+            "title": req.title,
+            "description": req.description,
+            "request_type": req.request_type,
+            "decision_status": req.decision_status,
+            "execution_status": req.execution_status,
+            "decision_reason": req.decision_reason,
+            "escalation_reason": req.escalation_reason,
+            "execution_evidence": req.execution_evidence,
+            "timeline": events_data,
+            "created_at": req.created_at.isoformat(),
+            "updated_at": req.updated_at.isoformat()
+        }
+

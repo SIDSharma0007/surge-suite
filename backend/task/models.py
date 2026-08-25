@@ -366,3 +366,153 @@ class InstitutionalPolicy(models.Model):
 
     def __str__(self):
         return f"Policy {self.name} [{self.effect}]"
+
+
+class WorkspaceRequest(models.Model):
+    """
+    Unified, persistent Request / Case entity for all human-in-the-loop workflows.
+    Bridges Member -> AI -> Review -> Approval/Rejection/Escalation -> Execution -> Evidence.
+    """
+    REQUEST_TYPES = [
+        ('GRIEVANCE', 'Grievance'),
+        ('CERTIFICATE', 'Certificate Request'),
+        ('MAINTENANCE', 'Maintenance Ticket'),
+        ('LAB_BOOKING', 'Laboratory Booking'),
+        ('GENERAL', 'General Request'),
+    ]
+
+    DECISION_STATUSES = [
+        ('SUBMITTED', 'Submitted'),
+        ('UNDER_REVIEW', 'Under Review'),
+        ('ESCALATED', 'Escalated'),
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected'),
+    ]
+
+    EXECUTION_STATUSES = [
+        ('NOT_STARTED', 'Not Started'),
+        ('RUNNING', 'Running'),
+        ('COMPLETED', 'Completed'),
+        ('FAILED', 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    display_id = models.CharField(max_length=50, unique=True, db_index=True)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='workspace_requests')
+    requester = models.ForeignKey(User, on_delete=models.CASCADE, related_name='submitted_requests')
+
+    request_type = models.CharField(max_length=50, choices=REQUEST_TYPES, default='GENERAL')
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+
+    decision_status = models.CharField(max_length=50, choices=DECISION_STATUSES, default='SUBMITTED')
+    execution_status = models.CharField(max_length=50, choices=EXECUTION_STATUSES, default='NOT_STARTED')
+
+    reviewer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_requests')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    decision_reason = models.TextField(blank=True)
+
+    escalated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='escalated_requests')
+    escalated_at = models.DateTimeField(null=True, blank=True)
+    escalation_reason = models.TextField(blank=True)
+
+    execution_result = models.JSONField(null=True, blank=True)
+    execution_evidence = models.JSONField(null=True, blank=True)
+
+    is_archived = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['workspace', 'decision_status']),
+            models.Index(fields=['workspace', 'requester']),
+            models.Index(fields=['workspace', 'is_archived']),
+            models.Index(fields=['display_id']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.display_id:
+            year = timezone.now().year
+            prefix = f"REQ-{year}-"
+            last_req = WorkspaceRequest.objects.filter(display_id__startswith=prefix).order_by('-display_id').first()
+            if last_req and last_req.display_id:
+                try:
+                    last_num = int(last_req.display_id.split('-')[-1])
+                    next_num = last_num + 1
+                except (ValueError, IndexError):
+                    next_num = WorkspaceRequest.objects.filter(created_at__year=year).count() + 1
+            else:
+                next_num = 1
+            self.display_id = f"REQ-{year}-{next_num:06d}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.display_id} [{self.request_type}] - {self.decision_status}"
+
+
+class RequestEvent(models.Model):
+    """
+    Immutable audit trail event for every transition or milestone in a WorkspaceRequest's lifecycle.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request = models.ForeignKey(WorkspaceRequest, on_delete=models.CASCADE, related_name='timeline_events')
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='request_events')
+    actor_role = models.CharField(max_length=50, default='SYSTEM')
+    event_type = models.CharField(max_length=50) # CREATED, CLASSIFIED, REVIEW_STARTED, ESCALATED, APPROVED, REJECTED, EXECUTION_STARTED, EXECUTION_COMPLETED, EXECUTION_FAILED, ARCHIVED
+    from_status = models.CharField(max_length=50, blank=True, default='')
+    to_status = models.CharField(max_length=50, blank=True, default='')
+    message = models.TextField(blank=True)
+    is_internal = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['request', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.event_type} on {self.request.display_id} at {self.created_at}"
+
+
+class WorkspaceNotification(models.Model):
+    """
+    Workspace-scoped notification for member, admin, and owner event dispatching.
+    """
+    NOTIFICATION_TYPES = [
+        ('NEW_REQUEST', 'New Request'),
+        ('REQUEST_ESCALATED', 'Request Escalated'),
+        ('REQUEST_APPROVED', 'Request Approved'),
+        ('REQUEST_REJECTED', 'Request Rejected'),
+        ('REQUEST_COMPLETED', 'Request Completed'),
+        ('REQUEST_FAILED', 'Request Failed'),
+        ('GENERAL', 'General Notification'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='notifications')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='workspace_notifications')
+    request = models.ForeignKey(WorkspaceRequest, on_delete=models.CASCADE, null=True, blank=True, related_name='notifications')
+
+    notification_type = models.CharField(max_length=50, choices=NOTIFICATION_TYPES, default='GENERAL')
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    action_url = models.CharField(max_length=500, blank=True, default='')
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['workspace', 'recipient', 'is_read']),
+            models.Index(fields=['created_at']),
+        ]
+
+    def __str__(self):
+        return f"Notification to {self.recipient.username}: {self.title} [{self.workspace.name}]"
+

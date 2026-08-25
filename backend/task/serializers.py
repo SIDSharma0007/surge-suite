@@ -2,7 +2,8 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from .models import (
     Agent, Task, TaskExecution, Action, ExecutionEvent, HumanApprovalRequest, UserMCPServer,
-    CertificateRequest, MaintenanceTicket, LaboratoryBooking, GrievanceEscalation, InstitutionalPolicy
+    CertificateRequest, MaintenanceTicket, LaboratoryBooking, GrievanceEscalation, InstitutionalPolicy,
+    WorkspaceRequest, RequestEvent, WorkspaceNotification
 )
 
 class TaskUserSerializer(serializers.ModelSerializer):
@@ -248,4 +249,75 @@ class InstitutionalPolicySerializer(serializers.ModelSerializer):
         model = InstitutionalPolicy
         fields = ['id', 'workspace', 'name', 'description', 'rules', 'effect', 'priority', 'created_at', 'updated_at']
         read_only_fields = ['id', 'workspace', 'created_at', 'updated_at']
+
+
+class RequestEventSerializer(serializers.ModelSerializer):
+    actor_username = serializers.CharField(source='actor.username', read_only=True)
+
+    class Meta:
+        model = RequestEvent
+        fields = [
+            'id', 'request', 'actor', 'actor_username', 'actor_role',
+            'event_type', 'from_status', 'to_status', 'message',
+            'is_internal', 'metadata', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'actor_username']
+
+
+class WorkspaceRequestSerializer(serializers.ModelSerializer):
+    requester_username = serializers.CharField(source='requester.username', read_only=True)
+    reviewer_username = serializers.CharField(source='reviewer.username', read_only=True)
+    escalated_by_username = serializers.CharField(source='escalated_by.username', read_only=True)
+    timeline_events = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkspaceRequest
+        fields = [
+            'id', 'display_id', 'workspace', 'requester', 'requester_username',
+            'request_type', 'title', 'description', 'payload',
+            'decision_status', 'execution_status',
+            'reviewer', 'reviewer_username', 'reviewed_at', 'decision_reason',
+            'escalated_by', 'escalated_by_username', 'escalated_at', 'escalation_reason',
+            'execution_result', 'execution_evidence', 'is_archived',
+            'timeline_events', 'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'id', 'display_id', 'workspace', 'requester', 'requester_username',
+            'decision_status', 'execution_status', 'reviewer', 'reviewer_username',
+            'reviewed_at', 'escalated_by', 'escalated_by_username', 'escalated_at',
+            'execution_result', 'execution_evidence', 'is_archived',
+            'timeline_events', 'created_at', 'updated_at'
+        ]
+
+    def get_timeline_events(self, obj):
+        request = self.context.get('request')
+        events = obj.timeline_events.all().order_by('created_at')
+        if request and request.user:
+            # If user is not admin/owner, hide internal events
+            is_admin_or_owner = (
+                obj.workspace.owner == request.user or
+                obj.workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+            )
+            if not is_admin_or_owner:
+                events = events.filter(is_internal=False)
+        return RequestEventSerializer(events, many=True).data
+
+
+class WorkspaceNotificationSerializer(serializers.ModelSerializer):
+    recipient_username = serializers.CharField(source='recipient.username', read_only=True)
+    request_display_id = serializers.CharField(source='request.display_id', read_only=True)
+
+    class Meta:
+        model = WorkspaceNotification
+        fields = [
+            'id', 'workspace', 'recipient', 'recipient_username',
+            'request', 'request_display_id', 'notification_type',
+            'title', 'message', 'is_read', 'action_url', 'metadata',
+            'created_at'
+        ]
+        read_only_fields = [
+            'id', 'workspace', 'recipient', 'recipient_username',
+            'request_display_id', 'created_at'
+        ]
+
 
