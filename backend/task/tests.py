@@ -3717,6 +3717,16 @@ class InstitutionalIntelligenceTestCase(TestCase):
         }
         response = client.post("/api/v1/mcp/policies/", policy_data, format="json")
         self.assertEqual(response.status_code, 201)
+        created_policy_id = response.data["id"]
+
+        # 2b. DELETE policy as owner without WorkspaceMembership -> returns 204
+        response = client.delete(f"/api/v1/mcp/policies/{created_policy_id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(InstitutionalPolicy.objects.filter(id=created_policy_id).exists())
+
+        # Re-create policy for other assertions
+        response = client.post("/api/v1/mcp/policies/", policy_data, format="json")
+        self.assertEqual(response.status_code, 201)
 
         # 3. GET policies again should return the created policy
         response = client.get(f"/api/v1/mcp/policies/?workspace_id={owner_workspace.id}")
@@ -3778,6 +3788,199 @@ class InstitutionalIntelligenceTestCase(TestCase):
             response = client.get(f"/api/v1/workflows/{wf_type}/?workspace_id={owner_workspace.id}")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(len(response.data), 0)
+
+    def test_ui_target_resource_matching_regression(self):
+        from task.models import InstitutionalPolicy
+        from task.services.policy_engine import PolicyEngine
+
+        # 1. target_resource="laboratory" -> matches laboratory_bookings.create_lab_booking -> DENY
+        p1 = InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="No Lab Bookings",
+            rules={"target_resource": "laboratory"},
+            effect="DENY",
+            priority=10
+        )
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect, "DENY")
+        p1.delete()
+
+        # 2. target_resource="maintenance" -> matches maintenance_tickets.create_maintenance_ticket -> DENY
+        p2 = InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="No Maintenance",
+            rules={"target_resource": "maintenance"},
+            effect="DENY",
+            priority=10
+        )
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="maintenance_tickets.create_maintenance_ticket",
+            resource_data={}
+        )
+        self.assertEqual(effect, "DENY")
+        p2.delete()
+
+        # 3. target_resource="certificate" -> matches certificate_requests.create_certificate_request -> ALLOW when policy effect is ALLOW
+        p3 = InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Allow Certificates",
+            rules={"target_resource": "certificate"},
+            effect="ALLOW",
+            priority=10
+        )
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="certificate_requests.create_certificate_request",
+            resource_data={}
+        )
+        self.assertEqual(effect, "ALLOW")
+        p3.delete()
+
+        # 4. target_resource="laboratory", effect="REQUIRES_APPROVAL" -> REQUIRES_APPROVAL
+        p4 = InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Approve Lab Bookings",
+            rules={"target_resource": "laboratory"},
+            effect="REQUIRES_APPROVAL",
+            priority=10
+        )
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect, "REQUIRES_APPROVAL")
+        p4.delete()
+
+        # 5. same-priority laboratory ALLOW + DENY -> ESCALATE
+        p5_allow = InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Allow Lab Bookings",
+            rules={"target_resource": "laboratory"},
+            effect="ALLOW",
+            priority=10
+        )
+        p5_deny = InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Deny Lab Bookings",
+            rules={"target_resource": "laboratory"},
+            effect="DENY",
+            priority=10
+        )
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect, "ESCALATE")
+        p5_allow.delete()
+        p5_deny.delete()
+
+        # 6. laboratory_bookings.* -> matches all laboratory actions
+        p6 = InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Wildcard Lab",
+            rules={"target_resource": "laboratory_bookings.*"},
+            effect="DENY",
+            priority=10
+        )
+        effect1 = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={}
+        )
+        effect2 = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.cancel_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect1, "DENY")
+        self.assertEqual(effect2, "DENY")
+        p6.delete()
+
+        # 7. policy_engine_enabled=False -> ALLOW
+        self.workspace.policy_engine_enabled = False
+        self.workspace.save()
+        InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Deny Lab Bookings",
+            rules={"target_resource": "laboratory"},
+            effect="DENY",
+            priority=10
+        )
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect, "ALLOW")
+        self.workspace.policy_engine_enabled = True
+        self.workspace.save()
+        InstitutionalPolicy.objects.all().delete()
+
+    def test_mcp_registry_policy_blocking_integration(self):
+        from task.services.mcp.registry import MCPRegistry
+        from task.models import InstitutionalPolicy
+        from unittest.mock import MagicMock
+        from task.services.capability_registry import ApprovalRequiredException
+
+        # 1. Create a DENY policy on laboratory
+        InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Deny Lab Bookings",
+            rules={"target_resource": "laboratory"},
+            effect="DENY",
+            priority=10
+        )
+
+        # Setup registry with mocked client
+        registry = MCPRegistry(user=self.user, workspace=self.workspace)
+        mock_client = MagicMock()
+        registry.tools["laboratory_bookings.create_lab_booking"] = (mock_client, {"original_name": "create_lab_booking"})
+
+        # Execute tool under DENY policy (pass mock parameters to bypass parameter verification)
+        mock_args = {"lab_name": "CS Lab", "date": "2026-09-01", "start_time": "10:00", "end_time": "12:00"}
+        res = registry.execute_tool("laboratory_bookings.create_lab_booking", mock_args)
+        
+        # Verify DENY returned error and mock_client was never called
+        self.assertIn("error", res)
+        self.assertIn("Denied by institutional policy", res["error"])
+        mock_client.send_request.assert_not_called()
+
+        # Cleanup policies
+        InstitutionalPolicy.objects.all().delete()
+
+        # 2. Create a REQUIRES_APPROVAL policy on laboratory
+        InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Approve Lab Bookings",
+            rules={"target_resource": "laboratory"},
+            effect="REQUIRES_APPROVAL",
+            priority=10
+        )
+
+        # Execute tool under REQUIRES_APPROVAL policy
+        with self.assertRaises(ApprovalRequiredException):
+            registry.execute_tool("laboratory_bookings.create_lab_booking", mock_args)
+
+        # Verify mock_client was never called
+        mock_client.send_request.assert_not_called()
+
+        # Cleanup
+        InstitutionalPolicy.objects.all().delete()
 
 
 

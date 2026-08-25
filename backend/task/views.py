@@ -388,7 +388,16 @@ class CertificateRequestViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
-            return CertificateRequest.objects.none()
+            pk = self.kwargs.get('pk')
+            if pk:
+                from django.core.exceptions import ValidationError
+                try:
+                    obj = CertificateRequest.objects.get(pk=pk)
+                    workspace_id = obj.workspace_id
+                except (CertificateRequest.DoesNotExist, ValueError, ValidationError):
+                    return CertificateRequest.objects.none()
+            else:
+                return CertificateRequest.objects.none()
         from workspace.models import Workspace
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
@@ -403,7 +412,16 @@ class MaintenanceTicketViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
-            return MaintenanceTicket.objects.none()
+            pk = self.kwargs.get('pk')
+            if pk:
+                from django.core.exceptions import ValidationError
+                try:
+                    obj = MaintenanceTicket.objects.get(pk=pk)
+                    workspace_id = obj.workspace_id
+                except (MaintenanceTicket.DoesNotExist, ValueError, ValidationError):
+                    return MaintenanceTicket.objects.none()
+            else:
+                return MaintenanceTicket.objects.none()
         from workspace.models import Workspace
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
@@ -418,7 +436,16 @@ class LaboratoryBookingViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
-            return LaboratoryBooking.objects.none()
+            pk = self.kwargs.get('pk')
+            if pk:
+                from django.core.exceptions import ValidationError
+                try:
+                    obj = LaboratoryBooking.objects.get(pk=pk)
+                    workspace_id = obj.workspace_id
+                except (LaboratoryBooking.DoesNotExist, ValueError, ValidationError):
+                    return LaboratoryBooking.objects.none()
+            else:
+                return LaboratoryBooking.objects.none()
         from workspace.models import Workspace
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
@@ -433,7 +460,16 @@ class GrievanceEscalationViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
-            return GrievanceEscalation.objects.none()
+            pk = self.kwargs.get('pk')
+            if pk:
+                from django.core.exceptions import ValidationError
+                try:
+                    obj = GrievanceEscalation.objects.get(pk=pk)
+                    workspace_id = obj.workspace_id
+                except (GrievanceEscalation.DoesNotExist, ValueError, ValidationError):
+                    return GrievanceEscalation.objects.none()
+            else:
+                return GrievanceEscalation.objects.none()
         from workspace.models import Workspace
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
@@ -448,7 +484,16 @@ class InstitutionalPolicyViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
-            return InstitutionalPolicy.objects.none()
+            pk = self.kwargs.get('pk')
+            if pk:
+                from django.core.exceptions import ValidationError
+                try:
+                    obj = InstitutionalPolicy.objects.get(pk=pk)
+                    workspace_id = obj.workspace_id
+                except (InstitutionalPolicy.DoesNotExist, ValueError, ValidationError):
+                    return InstitutionalPolicy.objects.none()
+            else:
+                return InstitutionalPolicy.objects.none()
         from workspace.models import Workspace
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():

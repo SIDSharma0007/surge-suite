@@ -2,6 +2,13 @@ from typing import List, Dict, Any, Optional
 from django.db.models import Q
 from task.models import InstitutionalPolicy
 
+RESOURCE_ALIASES = {
+    "certificate": "certificate_requests",
+    "maintenance": "maintenance_tickets",
+    "laboratory": "laboratory_bookings",
+    "grievance": "grievance_escalation",
+}
+
 class PolicyEngine:
     """
     Evaluates institutional policies for action calls in a workspace.
@@ -10,18 +17,38 @@ class PolicyEngine:
     """
 
     @staticmethod
+    def _target_resource_matches(target: str, action_type: str) -> bool:
+        if target == "*":
+            return True
+
+        normalized_target = target.lower()
+        
+        # If it ends with ".*", resolve the prefix
+        if normalized_target.endswith(".*"):
+            prefix = normalized_target[:-2]
+            resolved_prefix = RESOURCE_ALIASES.get(prefix, prefix)
+            normalized_target = f"{resolved_prefix}.*"
+        else:
+            # If target matches one of the aliases, it should match the entire server as a wildcard
+            if normalized_target in RESOURCE_ALIASES:
+                normalized_target = f"{RESOURCE_ALIASES[normalized_target]}.*"
+
+        # Match wildcard
+        if normalized_target.endswith(".*"):
+            prefix = normalized_target[:-2]
+            return action_type.startswith(prefix)
+
+        # Match exact action
+        return normalized_target == action_type.lower()
+
+    @staticmethod
     def _policy_matches(policy: InstitutionalPolicy, user, action_type: str, resource_data: dict) -> bool:
         rules = policy.rules or {}
 
-        # 1. Target Resource check (exact action name or wildcard match, e.g. "laboratory_bookings.*")
+        # 1. Target Resource check
         target = rules.get("target_resource", "*")
-        if target != "*":
-            if target.endswith(".*"):
-                prefix = target[:-2]
-                if not action_type.startswith(prefix):
-                    return False
-            elif target != action_type:
-                return False
+        if not PolicyEngine._target_resource_matches(target, action_type):
+            return False
 
         # 2. User constraints (e.g. username filter)
         username_contains = rules.get("username_contains")
