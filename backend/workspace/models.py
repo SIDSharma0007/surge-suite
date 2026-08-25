@@ -15,6 +15,12 @@ class Workspace(models.Model):
     archived_at = models.DateTimeField(null=True, blank=True)
     scheduled_deletion_at = models.DateTimeField(null=True, blank=True)
 
+    # Institutional Intelligence Settings
+    context_window_limit = models.IntegerField(default=4000)
+    institutional_knowledge_enabled = models.BooleanField(default=True)
+    policy_engine_enabled = models.BooleanField(default=True)
+    workflow_execution_enabled = models.BooleanField(default=True)
+
     class Meta:
         ordering = ['-created_at']
 
@@ -105,5 +111,34 @@ class WorkspaceContextItem(models.Model):
             models.Index(fields=['workspace', 'context_type']),
         ]
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.context_type == 'INSTITUTIONAL_REFERENCE' and self.is_active and not self.is_archived:
+            try:
+                from task.services.rag_service import RAGService
+                RAGService.chunk_and_store_document(self)
+            except Exception:
+                pass
+
     def __str__(self):
         return f"{self.name} [{self.context_type}] ({self.workspace.name})"
+
+
+class WorkspaceContextItemChunk(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    context_item = models.ForeignKey(WorkspaceContextItem, on_delete=models.CASCADE, related_name='chunks')
+    chunk_index = models.IntegerField()
+    content = models.TextField()
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['chunk_index']
+        unique_together = ('context_item', 'chunk_index')
+        indexes = [
+            models.Index(fields=['context_item']),
+        ]
+
+    def __str__(self):
+        return f"Chunk {self.chunk_index} of {self.context_item.name}"

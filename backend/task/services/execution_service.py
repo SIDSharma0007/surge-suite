@@ -468,6 +468,7 @@ class ExecutionService:
         # If execution service was initialized with a specific provider override (e.g. FakeModelProvider for tests), we use it.
         # Otherwise, we resolve it based on agent.provider.
         is_override = self.provider and not isinstance(self.provider, RealGeminiModelProvider)
+        workspace = task.workspace
         
         if is_override:
             model_provider = self.provider
@@ -476,7 +477,6 @@ class ExecutionService:
             model_name = 'dev-mock'
             resolved_key = None
         else:
-            workspace = task.workspace
             provider_name = workspace.ai_provider or 'simulated'
             model_name = workspace.ai_model or 'dev-mock'
             
@@ -577,7 +577,7 @@ class ExecutionService:
 
         required_mcp_servers = self._determine_required_mcp_servers(task.problem_statement, user=task.creator, is_real=is_real)
 
-        mcp_registry = MCPRegistry()
+        mcp_registry = MCPRegistry(user=task.creator, workspace=task.workspace)
         mcp_tools = []
         if required_mcp_servers:
             try:
@@ -690,7 +690,13 @@ class ExecutionService:
             "}\n\n"
             "FINAL ANSWER FORMAT:\n"
             "Only when you have executed the necessary tools and received real results (or if the task is a purely general conceptual question that requires no external data), return your final answer in clear natural-language Markdown format.\n"
-            "Do NOT wrap your final response in a tool call JSON object."
+            "Do NOT wrap your final response in a tool call JSON object.\n\n"
+            "INSTITUTIONAL GROUNDING RULES:\n"
+            "- You have access to VERIFIED TRUSTED INSTITUTIONAL EVIDENCE from the workspace.\n"
+            "- You MUST base all answers about institutional policies, deadlines, fees, rules, and procedures SOLELY on this evidence.\n"
+            "- If the evidence is marked as CONFLICTING, do NOT choose or assume; state the conflict clearly to the user and ask for clarification, or escalate.\n"
+            "- If the status is INSUFFICIENT_EVIDENCE or UNVERIFIED (i.e. no relevant chunks are found), explicitly state that the claim could not be verified from institutional sources. Do NOT guess or make up policies.\n"
+            "- Always cite the source document name in your answer when referencing institutional facts.\n"
         )
 
         # Enhance system instruction with workspace instructions (system prompt & skills)
@@ -714,9 +720,71 @@ class ExecutionService:
         except Exception:
             context_block = ""
 
+        # Retrieve RAG and Policy information
+        from task.services.rag_service import RAGService
+        from task.services.uncertainty_detector import UncertaintyDetector, UncertaintyStatus
+        from task.models import InstitutionalPolicy
+
+        rag_chunks = []
+        if workspace.institutional_knowledge_enabled:
+            rag_chunks = RAGService.retrieve_trusted_knowledge(workspace, task.problem_statement)
+
+        verification_status = UncertaintyStatus.VERIFIED
+        if workspace.institutional_knowledge_enabled:
+            verification_status = UncertaintyDetector.classify_verification(rag_chunks, task.problem_statement)
+
+        applicable_policies = []
+        if workspace.policy_engine_enabled:
+            for policy in InstitutionalPolicy.objects.filter(workspace=workspace):
+                applicable_policies.append(f"- Policy: {policy.name} ({policy.effect}): {policy.description or 'No description'}")
+
+        rag_prompt_blocks = []
+        if rag_chunks:
+            rag_prompt_blocks.append("=== VERIFIED TRUSTED INSTITUTIONAL EVIDENCE ===")
+            for idx, chunk in enumerate(rag_chunks):
+                rag_prompt_blocks.append(
+                    f"Evidence [{idx + 1}]:\n"
+                    f"Source: {chunk['source']} (Doc ID: {chunk['document_id']}, Chunk: {chunk['chunk_index']})\n"
+                    f"Content: {chunk['content']}\n"
+                )
+            rag_prompt_blocks.append(f"VERIFICATION STATUS: {verification_status}")
+            if verification_status == UncertaintyStatus.CONFLICTING:
+                rag_prompt_blocks.append(
+                    "WARNING: Conflicting institutional information detected. "
+                    "You MUST NOT guess or make an assumption. State the conflict clearly "
+                    "to the user and ask for clarification, or escalate."
+                )
+            rag_prompt_blocks.append("==============================================")
+        elif workspace.institutional_knowledge_enabled:
+            verification_status = UncertaintyStatus.INSUFFICIENT_EVIDENCE
+            rag_prompt_blocks.append("=== VERIFIED TRUSTED INSTITUTIONAL EVIDENCE ===")
+            rag_prompt_blocks.append("No matching institutional reference chunks were found for this query.")
+            rag_prompt_blocks.append(f"VERIFICATION STATUS: {verification_status}")
+            rag_prompt_blocks.append(
+                "NOTICE: Insufficient evidence to verify any institutional facts. "
+                "You MUST NOT invent policies, deadlines, or fees. Explicitly state "
+                "that the information could not be verified from available institutional sources."
+            )
+            rag_prompt_blocks.append("==============================================")
+
+        policy_info_block = ""
+        if applicable_policies:
+            policy_info_block = (
+                "=== ACTIVE INSTITUTIONAL POLICIES ===\n"
+                + "\n".join(applicable_policies) + "\n"
+                "====================================="
+            )
+
         prompt_elements = []
         if context_block:
             prompt_elements.append(context_block)
+
+        rag_text = "\n".join(rag_prompt_blocks)
+        if rag_text:
+            prompt_elements.append(rag_text)
+        if policy_info_block:
+            prompt_elements.append(policy_info_block)
+
         prompt_elements.append(f"AVAILABLE TOOLS:\n{capabilities_text}")
         prompt_elements.append(f"Task: {task.problem_statement}")
 
@@ -1388,7 +1456,7 @@ class ExecutionService:
 
         required_mcp_servers = self._determine_required_mcp_servers(task.problem_statement, user=task.creator, is_real=is_real)
 
-        mcp_registry = MCPRegistry()
+        mcp_registry = MCPRegistry(user=task.creator, workspace=task.workspace)
         mcp_tools = []
         if required_mcp_servers:
             try:
@@ -1443,13 +1511,81 @@ class ExecutionService:
             "{\n  \"tool_call\": {\n    \"name\": \"tool_name\",\n    \"arguments\": {\"arg1\": \"val1\"}\n  }\n}\n\n"
             "FINAL ANSWER FORMAT:\n"
             "Return your final answer in clear Markdown when you have real tool results or it is a conceptual question.\n"
-            "Do NOT wrap your final response in tool call JSON."
+            "Do NOT wrap your final response in tool call JSON.\n\n"
+            "INSTITUTIONAL GROUNDING RULES:\n"
+            "- You have access to VERIFIED TRUSTED INSTITUTIONAL EVIDENCE from the workspace.\n"
+            "- You MUST base all answers about institutional policies, deadlines, fees, rules, and procedures SOLELY on this evidence.\n"
+            "- If the evidence is marked as CONFLICTING, do NOT choose or assume; state the conflict clearly to the user and ask for clarification, or escalate.\n"
+            "- If the status is INSUFFICIENT_EVIDENCE or UNVERIFIED (i.e. no relevant chunks are found), explicitly state that the claim could not be verified from institutional sources. Do NOT guess or make up policies.\n"
+            "- Always cite the source document name in your answer when referencing institutional facts.\n"
         )
 
-        prompt_with_history = (
-            f"AVAILABLE TOOLS:\n{capabilities_text}\n\n"
-            f"Task: {task.problem_statement}\n\n"
-        )
+        # Retrieve RAG and Policy information
+        from task.services.rag_service import RAGService
+        from task.services.uncertainty_detector import UncertaintyDetector, UncertaintyStatus
+        from task.models import InstitutionalPolicy
+
+        rag_chunks = []
+        if workspace.institutional_knowledge_enabled:
+            rag_chunks = RAGService.retrieve_trusted_knowledge(workspace, task.problem_statement)
+
+        verification_status = UncertaintyStatus.VERIFIED
+        if workspace.institutional_knowledge_enabled:
+            verification_status = UncertaintyDetector.classify_verification(rag_chunks, task.problem_statement)
+
+        applicable_policies = []
+        if workspace.policy_engine_enabled:
+            for policy in InstitutionalPolicy.objects.filter(workspace=workspace):
+                applicable_policies.append(f"- Policy: {policy.name} ({policy.effect}): {policy.description or 'No description'}")
+
+        rag_prompt_blocks = []
+        if rag_chunks:
+            rag_prompt_blocks.append("=== VERIFIED TRUSTED INSTITUTIONAL EVIDENCE ===")
+            for idx, chunk in enumerate(rag_chunks):
+                rag_prompt_blocks.append(
+                    f"Evidence [{idx + 1}]:\n"
+                    f"Source: {chunk['source']} (Doc ID: {chunk['document_id']}, Chunk: {chunk['chunk_index']})\n"
+                    f"Content: {chunk['content']}\n"
+                )
+            rag_prompt_blocks.append(f"VERIFICATION STATUS: {verification_status}")
+            if verification_status == UncertaintyStatus.CONFLICTING:
+                rag_prompt_blocks.append(
+                    "WARNING: Conflicting institutional information detected. "
+                    "You MUST NOT guess or make an assumption. State the conflict clearly "
+                    "to the user and ask for clarification, or escalate."
+                )
+            rag_prompt_blocks.append("==============================================")
+        elif workspace.institutional_knowledge_enabled:
+            verification_status = UncertaintyStatus.INSUFFICIENT_EVIDENCE
+            rag_prompt_blocks.append("=== VERIFIED TRUSTED INSTITUTIONAL EVIDENCE ===")
+            rag_prompt_blocks.append("No matching institutional reference chunks were found for this query.")
+            rag_prompt_blocks.append(f"VERIFICATION STATUS: {verification_status}")
+            rag_prompt_blocks.append(
+                "NOTICE: Insufficient evidence to verify any institutional facts. "
+                "You MUST NOT invent policies, deadlines, or fees. Explicitly state "
+                "that the information could not be verified from available institutional sources."
+            )
+            rag_prompt_blocks.append("==============================================")
+
+        policy_info_block = ""
+        if applicable_policies:
+            policy_info_block = (
+                "=== ACTIVE INSTITUTIONAL POLICIES ===\n"
+                + "\n".join(applicable_policies) + "\n"
+                "====================================="
+            )
+
+        prompt_elements = []
+        rag_text = "\n".join(rag_prompt_blocks)
+        if rag_text:
+            prompt_elements.append(rag_text)
+        if policy_info_block:
+            prompt_elements.append(policy_info_block)
+
+        prompt_elements.append(f"AVAILABLE TOOLS:\n{capabilities_text}")
+        prompt_elements.append(f"Task: {task.problem_statement}")
+
+        prompt_with_history = "\n\n".join(prompt_elements) + "\n\n"
 
         step = 0
         max_steps = 4

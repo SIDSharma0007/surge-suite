@@ -1,7 +1,24 @@
+import os
 import sys
 import json
+import django
+
+# Initialize Django
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+try:
+    django.setup()
+except Exception as e:
+    sys.stderr.write(f"Django setup error: {str(e)}\n")
+    sys.stderr.flush()
+
+from django.contrib.auth.models import User
+from workspace.models import Workspace
+from task.models import GrievanceEscalation
 
 def main():
+    user_id = os.environ.get("SURGE_USER_ID")
+    workspace_id = os.environ.get("SURGE_WORKSPACE_ID")
+
     for line in sys.stdin:
         try:
             line_str = line.strip()
@@ -95,15 +112,82 @@ def main():
                     }
                 }
             elif method == "tools/call":
-                result = {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Error: The institutional backend connection is currently inactive. This tool is registered/discoverable but the underlying API or database is not connected."
-                        }
-                    ],
-                    "isError": True
-                }
+                params = req.get("params", {})
+                tool_name = params.get("name")
+                arguments = params.get("arguments", {})
+
+                if not user_id or not workspace_id:
+                    result = {"content": [{"type": "text", "text": "Error: User or Workspace context is missing in environment variables."}], "isError": True}
+                else:
+                    try:
+                        workspace = Workspace.objects.get(id=workspace_id)
+                        user = User.objects.get(id=user_id)
+                        
+                        if not workspace.workflow_execution_enabled:
+                            result = {"content": [{"type": "text", "text": "Error: Institutional workflow execution is disabled for this workspace."}], "isError": True}
+                        elif tool_name == "create_grievance":
+                            subject = arguments.get("subject")
+                            description = arguments.get("description")
+                            department = arguments.get("department", "")
+                            
+                            grievance = GrievanceEscalation.objects.create(
+                                workspace=workspace,
+                                user=user,
+                                subject=subject,
+                                description=description,
+                                department=department,
+                                status='OPEN'
+                            )
+                            text = f"Successfully raised grievance.\nID: {grievance.id}\nSubject: {grievance.subject}\nDepartment: {grievance.department}\nStatus: {grievance.status}"
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "list_grievances":
+                            grievances = GrievanceEscalation.objects.filter(workspace=workspace, user=user)
+                            if grievances.exists():
+                                lines = [f"- {g.id}: {g.subject} [{g.status}]" for g in grievances]
+                                text = "Your filed grievances:\n" + "\n".join(lines)
+                            else:
+                                text = "You have not raised any grievances."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name in ["get_grievance", "get_grievance_status"]:
+                            grievance_id = arguments.get("grievance_id")
+                            try:
+                                g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
+                                text = f"Grievance Details:\nID: {g.id}\nSubject: {g.subject}\nDescription: {g.description}\nDepartment: {g.department}\nStatus: {g.status}\nCreated: {g.created_at.isoformat()}"
+                            except (GrievanceEscalation.DoesNotExist, ValueError):
+                                text = f"Error: Grievance with ID '{grievance_id}' not found."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "update_grievance":
+                            grievance_id = arguments.get("grievance_id")
+                            description = arguments.get("description")
+                            try:
+                                g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
+                                g.description = description
+                                g.save()
+                                text = f"Successfully updated grievance {g.id} description."
+                            except (GrievanceEscalation.DoesNotExist, ValueError):
+                                text = f"Error: Grievance with ID '{grievance_id}' not found."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "escalate_grievance":
+                            grievance_id = arguments.get("grievance_id")
+                            reason = arguments.get("reason", "")
+                            try:
+                                g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
+                                g.status = 'ESCALATED'
+                                g.description += f"\n[Escalation Reason: {reason}]"
+                                g.save()
+                                text = f"Successfully escalated grievance {g.id}."
+                            except (GrievanceEscalation.DoesNotExist, ValueError):
+                                text = f"Error: Grievance with ID '{grievance_id}' not found."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        else:
+                            result = {"content": [{"type": "text", "text": f"Error: Unknown tool '{tool_name}'"}], "isError": True}
+                    except Workspace.DoesNotExist:
+                        result = {"content": [{"type": "text", "text": "Error: Workspace not found."}], "isError": True}
+                    except User.DoesNotExist:
+                        result = {"content": [{"type": "text", "text": "Error: User not found."}], "isError": True}
+                    except Exception as ex:
+                        result = {"content": [{"type": "text", "text": f"Error: {str(ex)}"}], "isError": True}
+
                 res = {
                     "jsonrpc": "2.0",
                     "id": msg_id,

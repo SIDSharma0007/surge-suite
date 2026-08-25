@@ -1,0 +1,84 @@
+from typing import List, Dict, Any, Optional
+from django.db.models import Q
+from task.models import InstitutionalPolicy
+
+class PolicyEngine:
+    """
+    Evaluates institutional policies for action calls in a workspace.
+    Supports effects: ALLOW, DENY, REQUIRES_APPROVAL, ESCALATE.
+    Applies priority precedence and resolves conflicts safely as ESCALATE.
+    """
+
+    @staticmethod
+    def _policy_matches(policy: InstitutionalPolicy, user, action_type: str, resource_data: dict) -> bool:
+        rules = policy.rules or {}
+
+        # 1. Target Resource check (exact action name or wildcard match, e.g. "laboratory_bookings.*")
+        target = rules.get("target_resource", "*")
+        if target != "*":
+            if target.endswith(".*"):
+                prefix = target[:-2]
+                if not action_type.startswith(prefix):
+                    return False
+            elif target != action_type:
+                return False
+
+        # 2. User constraints (e.g. username filter)
+        username_contains = rules.get("username_contains")
+        if username_contains:
+            if username_contains.lower() not in user.username.lower():
+                return False
+
+        # 3. Resource Data checks
+        # Matches specific fields like lab_name, certificate_type, etc.
+        for key, expected_val in rules.items():
+            if key in ["target_resource", "username_contains"]:
+                continue
+            if key in resource_data:
+                val = resource_data[key]
+                if isinstance(val, str) and isinstance(expected_val, str):
+                    if val.lower() != expected_val.lower():
+                        return False
+                elif val != expected_val:
+                    return False
+            else:
+                # Expected key is missing from arguments
+                return False
+
+        return True
+
+    @staticmethod
+    def evaluate(workspace, user, action_type: str, resource_data: dict) -> str:
+        """
+        Evaluates policies for a workspace/user/action.
+        Resolves priorities and conflicts.
+        """
+        if not workspace.policy_engine_enabled:
+            return "ALLOW"
+
+        # Load all policies for this workspace
+        policies = InstitutionalPolicy.objects.filter(workspace=workspace)
+        if not policies.exists():
+            return "ALLOW"
+
+        matching_policies = []
+        for policy in policies:
+            if PolicyEngine._policy_matches(policy, user, action_type, resource_data):
+                matching_policies.append(policy)
+
+        if not matching_policies:
+            return "ALLOW"
+
+        # Sort matching policies by priority descending
+        matching_policies.sort(key=lambda p: p.priority, reverse=True)
+
+        highest_priority = matching_policies[0].priority
+        highest_priority_policies = [p for p in matching_policies if p.priority == highest_priority]
+
+        # Check for conflicts (different effects at the highest priority level)
+        effects = set(p.effect for p in highest_priority_policies)
+        if len(effects) > 1:
+            # Safe conflict resolution -> ESCALATE
+            return "ESCALATE"
+
+        return highest_priority_policies[0].effect

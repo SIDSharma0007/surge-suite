@@ -1,6 +1,9 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Agent, Task, TaskExecution, Action, ExecutionEvent, HumanApprovalRequest, UserMCPServer
+from .models import (
+    Agent, Task, TaskExecution, Action, ExecutionEvent, HumanApprovalRequest, UserMCPServer,
+    CertificateRequest, MaintenanceTicket, LaboratoryBooking, GrievanceEscalation, InstitutionalPolicy
+)
 
 class TaskUserSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='first_name', read_only=True)
@@ -202,4 +205,47 @@ class UserMCPServerSerializer(serializers.ModelSerializer):
             data["configuration"] = handshake_config
             
         return data
+
+
+class CertificateRequestSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = CertificateRequest
+        fields = ['id', 'workspace', 'user', 'user_username', 'certificate_type', 'description', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'workspace', 'user_username', 'created_at', 'updated_at']
+
+
+class MaintenanceTicketSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = MaintenanceTicket
+        fields = ['id', 'workspace', 'user', 'user_username', 'category', 'description', 'location', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'workspace', 'user_username', 'created_at', 'updated_at']
+
+
+class LaboratoryBookingSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = LaboratoryBooking
+        fields = ['id', 'workspace', 'user', 'user_username', 'lab_name', 'date', 'start_time', 'end_time', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'workspace', 'user_username', 'created_at', 'updated_at']
+
+
+class GrievanceEscalationSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = GrievanceEscalation
+        fields = ['id', 'workspace', 'user', 'user_username', 'subject', 'description', 'department', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'workspace', 'user_username', 'created_at', 'updated_at']
+
+
+class InstitutionalPolicySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InstitutionalPolicy
+        fields = ['id', 'workspace', 'name', 'description', 'rules', 'effect', 'priority', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'workspace', 'created_at', 'updated_at']
 

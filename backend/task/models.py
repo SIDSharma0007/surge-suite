@@ -235,3 +235,134 @@ class HumanApprovalRequest(models.Model):
 
     def __str__(self):
         return f"ApprovalRequest {self.id} [{self.status}] - {self.sanitized_display_command[:60]}"
+
+
+class CertificateRequest(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='certificate_requests')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='certificate_requests')
+    certificate_type = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=50,
+        choices=[
+            ('PENDING', 'Pending'),
+            ('PROCESSING', 'Processing'),
+            ('READY', 'Ready'),
+            ('REJECTED', 'Rejected'),
+            ('CANCELLED', 'Cancelled'),
+            ('COMPLETED', 'Completed')
+        ],
+        default='PENDING'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"CertificateRequest {self.id} [{self.status}]"
+
+
+class MaintenanceTicket(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='maintenance_tickets')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='maintenance_tickets')
+    category = models.CharField(max_length=100)
+    description = models.TextField()
+    location = models.CharField(max_length=255)
+    status = models.CharField(
+        max_length=50,
+        choices=[
+            ('OPEN', 'Open'),
+            ('ASSIGNED', 'Assigned'),
+            ('IN_PROGRESS', 'In Progress'),
+            ('RESOLVED', 'Resolved'),
+            ('CLOSED', 'Closed'),
+            ('ESCALATED', 'Escalated')
+        ],
+        default='OPEN'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"MaintenanceTicket {self.id} [{self.status}]"
+
+
+class LaboratoryBooking(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='lab_bookings')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='lab_bookings')
+    lab_name = models.CharField(max_length=255)
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    status = models.CharField(max_length=50, default='CONFIRMED')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"LaboratoryBooking {self.id} [{self.status}]"
+
+
+class GrievanceEscalation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='grievances')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='grievances')
+    subject = models.CharField(max_length=255)
+    description = models.TextField()
+    department = models.CharField(max_length=255, blank=True)
+    status = models.CharField(
+        max_length=50,
+        choices=[
+            ('OPEN', 'Open'),
+            ('IN_PROGRESS', 'In Progress'),
+            ('ESCALATED', 'Escalated'),
+            ('RESOLVED', 'Resolved'),
+            ('CLOSED', 'Closed')
+        ],
+        default='OPEN'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"GrievanceEscalation {self.id} [{self.status}]"
+
+
+class InstitutionalPolicy(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='policies')
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    rules = models.JSONField(default=dict, blank=True)
+    effect = models.CharField(
+        max_length=50,
+        choices=[
+            ('ALLOW', 'Allow'),
+            ('DENY', 'Deny'),
+            ('REQUIRES_APPROVAL', 'Requires Approval'),
+            ('ESCALATE', 'Escalate')
+        ],
+        default='ALLOW'
+    )
+    priority = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-priority', '-created_at']
+
+    def __str__(self):
+        return f"Policy {self.name} [{self.effect}]"

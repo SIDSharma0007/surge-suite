@@ -14,15 +14,41 @@ import {
   FileCode, 
   FileType, 
   Eye, 
-  ShieldCheck
+  ShieldCheck,
+  Scale,
+  Activity
 } from 'lucide-react';
 
 export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onWorkspaceUpdated }) {
-  const [activeTab, setActiveTab] = useState('system'); // 'system' | 'context'
+  const [activeTab, setActiveTab] = useState('system'); // 'system' | 'context' | 'policies' | 'workflows'
   
   // System Prompt State
   const [systemPrompt, setSystemPrompt] = useState('');
   const [promptSaving, setPromptSaving] = useState(false);
+
+  // Institutional Intelligence Settings State
+  const [contextWindowLimit, setContextWindowLimit] = useState(10000);
+  const [institutionalKnowledgeEnabled, setInstitutionalKnowledgeEnabled] = useState(false);
+  const [policyEngineEnabled, setPolicyEngineEnabled] = useState(false);
+  const [workflowExecutionEnabled, setWorkflowExecutionEnabled] = useState(false);
+
+  // Policies Tab State
+  const [policies, setPolicies] = useState([]);
+  const [policiesLoading, setPoliciesLoading] = useState(false);
+  const [newPolicyName, setNewPolicyName] = useState('');
+  const [newPolicyDesc, setNewPolicyDesc] = useState('');
+  const [newPolicyEffect, setNewPolicyEffect] = useState('ALLOW');
+  const [newPolicyPriority, setNewPolicyPriority] = useState(1);
+  const [newPolicyRules, setNewPolicyRules] = useState('{\n  "target_resource": "*"\n}');
+  const [policyAdding, setPolicyAdding] = useState(false);
+
+  // Workflows Tab State
+  const [workflowsLoading, setWorkflowsLoading] = useState(false);
+  const [workflowFilterTab, setWorkflowFilterTab] = useState('certificates');
+  const [certificates, setCertificates] = useState([]);
+  const [maintenance, setMaintenance] = useState([]);
+  const [laboratory, setLaboratory] = useState([]);
+  const [grievances, setGrievances] = useState([]);
   
   // Skills State
   const [skills, setSkills] = useState([]);
@@ -79,6 +105,10 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
       // 1. Fetch workspace settings (system prompt)
       const settingsRes = await workspaceServices.getSettings(workspace.id);
       setSystemPrompt(settingsRes.data.system_prompt || '');
+      setContextWindowLimit(settingsRes.data.context_window_limit || 10000);
+      setInstitutionalKnowledgeEnabled(settingsRes.data.institutional_knowledge_enabled ?? false);
+      setPolicyEngineEnabled(settingsRes.data.policy_engine_enabled ?? false);
+      setWorkflowExecutionEnabled(settingsRes.data.workflow_execution_enabled ?? false);
 
       // 2. Fetch skills
       setSkillsLoading(true);
@@ -111,15 +141,115 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
     setErrorMsg(null);
     try {
       await workspaceServices.updateSettings(workspace.id, {
-        system_prompt: trimmed
+        system_prompt: trimmed,
+        context_window_limit: contextWindowLimit,
+        institutional_knowledge_enabled: institutionalKnowledgeEnabled,
+        policy_engine_enabled: policyEngineEnabled,
+        workflow_execution_enabled: workflowExecutionEnabled
       });
-      showNotification("System prompt updated successfully.");
+      showNotification("Workspace settings updated successfully.");
       if (onWorkspaceUpdated) onWorkspaceUpdated();
     } catch (err) {
       console.error(err);
       showNotification(err.response?.data?.error || "Failed to save system prompt.", true);
     } finally {
       setPromptSaving(false);
+    }
+  };
+
+  const loadPolicies = async () => {
+    if (!workspace?.id) return;
+    try {
+      setPoliciesLoading(true);
+      const res = await workspaceServices.listPolicies(workspace.id);
+      setPolicies(res.data);
+    } catch (err) {
+      console.error(err);
+      showNotification("Failed to load policies.", true);
+    } finally {
+      setPoliciesLoading(false);
+    }
+  };
+
+  const loadWorkflows = async () => {
+    if (!workspace?.id) return;
+    try {
+      setWorkflowsLoading(true);
+      const [certs, maint, lab, griev] = await Promise.all([
+        workspaceServices.listCertificateRequests(workspace.id),
+        workspaceServices.listMaintenanceTickets(workspace.id),
+        workspaceServices.listLabBookings(workspace.id),
+        workspaceServices.listGrievances(workspace.id)
+      ]);
+      setCertificates(certs.data);
+      setMaintenance(maint.data);
+      setLaboratory(lab.data);
+      setGrievances(griev.data);
+    } catch (err) {
+      console.error(err);
+      showNotification("Failed to load workflow logs.", true);
+    } finally {
+      setWorkflowsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'policies') {
+      loadPolicies();
+    } else if (activeTab === 'workflows') {
+      loadWorkflows();
+    }
+  }, [activeTab]);
+
+  const handleAddPolicy = async (e) => {
+    e.preventDefault();
+    if (!newPolicyName.trim()) {
+      showNotification("Policy name is required.", true);
+      return;
+    }
+    let parsedRules = {};
+    try {
+      parsedRules = JSON.parse(newPolicyRules);
+    } catch (err) {
+      showNotification("Rules must be a valid JSON object.", true);
+      return;
+    }
+
+    setPolicyAdding(true);
+    setErrorMsg(null);
+    try {
+      await workspaceServices.createPolicy({
+        workspace: workspace.id,
+        name: newPolicyName.trim(),
+        description: newPolicyDesc.trim(),
+        effect: newPolicyEffect,
+        priority: parseInt(newPolicyPriority) || 1,
+        rules: parsedRules
+      });
+      showNotification("Policy created successfully.");
+      setNewPolicyName('');
+      setNewPolicyDesc('');
+      setNewPolicyEffect('ALLOW');
+      setNewPolicyPriority(1);
+      setNewPolicyRules('{\n  "target_resource": "*"\n}');
+      loadPolicies();
+    } catch (err) {
+      console.error(err);
+      showNotification(err.response?.data?.error || "Failed to create policy.", true);
+    } finally {
+      setPolicyAdding(false);
+    }
+  };
+
+  const handleDeletePolicy = async (policyId) => {
+    if (!window.confirm("Are you sure you want to delete this policy?")) return;
+    try {
+      await workspaceServices.deletePolicy(policyId);
+      showNotification("Policy deleted successfully.");
+      loadPolicies();
+    } catch (err) {
+      console.error(err);
+      showNotification("Failed to delete policy.", true);
     }
   };
 
@@ -313,6 +443,33 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
               <span style={styles.countBadge}>{contextItems.length}</span>
             )}
           </button>
+          <button
+            onClick={() => setActiveTab('policies')}
+            style={{
+              ...styles.tabBtn,
+              borderBottom: activeTab === 'policies' ? '2px solid var(--text-primary)' : '2px solid transparent',
+              color: activeTab === 'policies' ? 'var(--text-primary)' : 'var(--text-muted)',
+              fontWeight: activeTab === 'policies' ? '600' : '500'
+            }}
+          >
+            <Scale size={15} style={{ marginRight: '8px' }} />
+            Institutional Policies
+            {policies.length > 0 && (
+              <span style={styles.countBadge}>{policies.length}</span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('workflows')}
+            style={{
+              ...styles.tabBtn,
+              borderBottom: activeTab === 'workflows' ? '2px solid var(--text-primary)' : '2px solid transparent',
+              color: activeTab === 'workflows' ? 'var(--text-primary)' : 'var(--text-muted)',
+              fontWeight: activeTab === 'workflows' ? '600' : '500'
+            }}
+          >
+            <Activity size={15} style={{ marginRight: '8px' }} />
+            Workflows Status
+          </button>
         </div>
 
         {/* Notification Alerts */}
@@ -372,6 +529,122 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                   >
                     <Save size={13} style={{ marginRight: '6px' }} />
                     {promptSaving ? 'Saving...' : 'Save System Prompt'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Institutional Intelligence Settings Section */}
+              <div style={{ ...styles.cardSection, marginTop: '20px' }}>
+                <div style={styles.sectionTitleRow}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <ShieldCheck size={15} style={{ color: 'var(--text-primary)' }} />
+                    <h4 style={styles.sectionTitle}>Institutional Intelligence</h4>
+                  </div>
+                  <span style={styles.metaHint}>Grounding & Policy Engine</span>
+                </div>
+                <p style={styles.sectionDesc}>
+                  Configure RAG contexts, policy compliance rules, and automated workflow triggers.
+                </p>
+
+                {/* Toggles */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <strong style={{ fontSize: '12px', color: 'var(--text-primary)' }}>Institutional Knowledge Retrieval (RAG)</strong>
+                      <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        Enable paragraph/sentence-chunked RAG on context files of type "Institutional Reference".
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={institutionalKnowledgeEnabled}
+                      onChange={(e) => setInstitutionalKnowledgeEnabled(e.target.checked)}
+                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <strong style={{ fontSize: '12px', color: 'var(--text-primary)' }}>Institutional Policy Engine</strong>
+                      <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        Evaluate workspace policies and apply priority-based allowances/restrictions before tool calls.
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={policyEngineEnabled}
+                      onChange={(e) => setPolicyEngineEnabled(e.target.checked)}
+                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <strong style={{ fontSize: '12px', color: 'var(--text-primary)' }}>Workflow Execution</strong>
+                      <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        Connect institutional MCP servers to persistent DB-backed ORM tables (bookings, tickets, certificates, grievances).
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={workflowExecutionEnabled}
+                      onChange={(e) => setWorkflowExecutionEnabled(e.target.checked)}
+                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                    />
+                  </div>
+
+                  {/* Context Window Limit */}
+                  <div style={{ marginTop: '6px' }}>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: '500', color: 'var(--text-primary)', marginBottom: '6px' }}>
+                      Context Window Limit (Characters):
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <input
+                        type="number"
+                        value={contextWindowLimit}
+                        onChange={(e) => setContextWindowLimit(parseInt(e.target.value) || 10000)}
+                        style={{ ...styles.textInput, width: '120px' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setContextWindowLimit(10000)}
+                        style={styles.secondaryBtn}
+                      >
+                        10k chars
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setContextWindowLimit(20000)}
+                        style={styles.secondaryBtn}
+                      >
+                        20k chars
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setContextWindowLimit(50000)}
+                        style={styles.secondaryBtn}
+                      >
+                        50k chars
+                      </button>
+                    </div>
+                    <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Restricts context delivery budget to enforce strict grounding without context window overflow.
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '14px' }}>
+                  <button
+                    onClick={handleSaveSystemPrompt}
+                    disabled={promptSaving}
+                    style={{
+                      ...styles.primaryActionBtn,
+                      opacity: promptSaving ? 0.45 : 1,
+                      cursor: promptSaving ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    <Save size={13} style={{ marginRight: '6px' }} />
+                    {promptSaving ? 'Saving...' : 'Save Workspace Config'}
                   </button>
                 </div>
               </div>
@@ -717,6 +990,314 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                 )}
               </div>
 
+            </div>
+          )}
+
+          {/* TAB 3: INSTITUTIONAL POLICIES */}
+          {activeTab === 'policies' && (
+            <div style={styles.tabSection}>
+              <p style={styles.sectionDesc}>
+                Define programmatic policy engine constraints. Evaluated before tool execution. Higher priority policies take precedence. Ties default to ESCALATE.
+              </p>
+
+              {/* Add Policy Form */}
+              <div style={{ ...styles.cardSection, marginTop: '16px' }}>
+                <h4 style={styles.sectionTitle}>Create Policy Rule</h4>
+                <form onSubmit={handleAddPolicy} style={{ marginTop: '12px' }}>
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={newPolicyName}
+                      onChange={(e) => setNewPolicyName(e.target.value)}
+                      placeholder="Policy Name (e.g. Reject CS Bookings)"
+                      style={{ ...styles.textInput, flex: 2, minWidth: '200px' }}
+                      required
+                    />
+                    <select
+                      value={newPolicyEffect}
+                      onChange={(e) => setNewPolicyEffect(e.target.value)}
+                      style={{ ...styles.selectInput, flex: 1, minWidth: '150px' }}
+                    >
+                      <option value="ALLOW">ALLOW</option>
+                      <option value="DENY">DENY</option>
+                      <option value="REQUIRES_APPROVAL">REQUIRES_APPROVAL</option>
+                      <option value="ESCALATE">ESCALATE</option>
+                    </select>
+                    <input
+                      type="number"
+                      value={newPolicyPriority}
+                      onChange={(e) => setNewPolicyPriority(e.target.value)}
+                      placeholder="Priority"
+                      style={{ ...styles.textInput, flex: 0.5, minWidth: '80px' }}
+                      min="1"
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: '10px' }}>
+                    <input
+                      type="text"
+                      value={newPolicyDesc}
+                      onChange={(e) => setNewPolicyDesc(e.target.value)}
+                      placeholder="Brief Description (e.g. Deny CS lab access to general users)"
+                      style={{ ...styles.textInput, width: '100%' }}
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: '10px' }}>
+                    <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                      Rules Constraint (JSON Object):
+                    </label>
+                    <textarea
+                      value={newPolicyRules}
+                      onChange={(e) => setNewPolicyRules(e.target.value)}
+                      rows={3}
+                      style={{ ...styles.textareaInput, fontFamily: 'monospace', fontSize: '11px' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="submit"
+                      disabled={policyAdding}
+                      style={{
+                        ...styles.primaryActionBtn,
+                        opacity: policyAdding ? 0.45 : 1,
+                        cursor: policyAdding ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      <Plus size={13} style={{ marginRight: '6px' }} />
+                      {policyAdding ? 'Creating...' : 'Create Policy'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Policies List */}
+              <div style={{ ...styles.cardSection, marginTop: '20px' }}>
+                <h4 style={styles.sectionTitle}>Active Policy Registry</h4>
+                {policiesLoading ? (
+                  <p style={styles.emptyText}>Loading policies...</p>
+                ) : policies.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
+                    {policies.map((p) => {
+                      const effectColors = {
+                        ALLOW: { bg: 'rgba(34, 197, 94, 0.1)', fg: 'var(--status-success, #22c55e)' },
+                        DENY: { bg: 'rgba(239, 68, 68, 0.1)', fg: 'var(--status-error, #ef4444)' },
+                        REQUIRES_APPROVAL: { bg: 'rgba(245, 158, 11, 0.1)', fg: '#f59e0b' },
+                        ESCALATE: { bg: 'rgba(107, 114, 128, 0.1)', fg: '#6b7280' }
+                      };
+                      const col = effectColors[p.effect] || { bg: 'var(--bg-hover)', fg: 'var(--text-primary)' };
+
+                      return (
+                        <div key={p.id} style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'flex-start',
+                          padding: '12px',
+                          border: '1px solid var(--border-light)',
+                          borderRadius: 'var(--radius-sm, 6px)',
+                          backgroundColor: 'var(--bg-card)'
+                        }}>
+                          <div style={{ flex: 1, minWidth: 0, paddingRight: '12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <strong style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{p.name}</strong>
+                              <span style={{
+                                padding: '2px 8px',
+                                borderRadius: '12px',
+                                fontSize: '10px',
+                                fontWeight: '600',
+                                backgroundColor: col.bg,
+                                color: col.fg
+                              }}>
+                                {p.effect}
+                              </span>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                Priority: {p.priority}
+                              </span>
+                            </div>
+                            {p.description && (
+                              <p style={{ margin: '4px 0 0 0', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                                {p.description}
+                              </p>
+                            )}
+                            <pre style={{
+                              margin: '8px 0 0 0',
+                              padding: '6px 10px',
+                              backgroundColor: 'var(--bg-sidebar)',
+                              border: '1px solid var(--border-light)',
+                              borderRadius: '4px',
+                              fontSize: '10.5px',
+                              color: 'var(--text-secondary)',
+                              overflowX: 'auto'
+                            }}>
+                              {JSON.stringify(p.rules, null, 2)}
+                            </pre>
+                          </div>
+                          <button
+                            onClick={() => handleDeletePolicy(p.id)}
+                            style={styles.deleteIconBtn}
+                            title="Delete Policy"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p style={styles.emptyText}>No policies defined yet.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: WORKFLOWS STATUS LOGS */}
+          {activeTab === 'workflows' && (
+            <div style={styles.tabSection}>
+              <p style={styles.sectionDesc}>
+                View real-time workflow database logs executed by your workspace agent. Scoped securely per user.
+              </p>
+
+              {/* Subtabs filter bar */}
+              <div style={{ ...styles.modeToggleGroup, marginBottom: '16px', justifyContent: 'flex-start' }}>
+                <button
+                  onClick={() => setWorkflowFilterTab('certificates')}
+                  style={{
+                    ...styles.modeToggleBtn,
+                    background: workflowFilterTab === 'certificates' ? 'var(--bg-card)' : 'transparent',
+                    color: workflowFilterTab === 'certificates' ? 'var(--text-primary)' : 'var(--text-muted)',
+                    padding: '6px 12px'
+                  }}
+                >
+                  Certificate Requests
+                  {certificates.length > 0 && <span style={{ ...styles.countBadge, marginLeft: '6px' }}>{certificates.length}</span>}
+                </button>
+                <button
+                  onClick={() => setWorkflowFilterTab('maintenance')}
+                  style={{
+                    ...styles.modeToggleBtn,
+                    background: workflowFilterTab === 'maintenance' ? 'var(--bg-card)' : 'transparent',
+                    color: workflowFilterTab === 'maintenance' ? 'var(--text-primary)' : 'var(--text-muted)',
+                    padding: '6px 12px'
+                  }}
+                >
+                  Maintenance Tickets
+                  {maintenance.length > 0 && <span style={{ ...styles.countBadge, marginLeft: '6px' }}>{maintenance.length}</span>}
+                </button>
+                <button
+                  onClick={() => setWorkflowFilterTab('laboratory')}
+                  style={{
+                    ...styles.modeToggleBtn,
+                    background: workflowFilterTab === 'laboratory' ? 'var(--bg-card)' : 'transparent',
+                    color: workflowFilterTab === 'laboratory' ? 'var(--text-primary)' : 'var(--text-muted)',
+                    padding: '6px 12px'
+                  }}
+                >
+                  Laboratory Bookings
+                  {laboratory.length > 0 && <span style={{ ...styles.countBadge, marginLeft: '6px' }}>{laboratory.length}</span>}
+                </button>
+                <button
+                  onClick={() => setWorkflowFilterTab('grievances')}
+                  style={{
+                    ...styles.modeToggleBtn,
+                    background: workflowFilterTab === 'grievances' ? 'var(--bg-card)' : 'transparent',
+                    color: workflowFilterTab === 'grievances' ? 'var(--text-primary)' : 'var(--text-muted)',
+                    padding: '6px 12px'
+                  }}
+                >
+                  Grievances
+                  {grievances.length > 0 && <span style={{ ...styles.countBadge, marginLeft: '6px' }}>{grievances.length}</span>}
+                </button>
+              </div>
+
+              {/* Logs Content */}
+              <div style={styles.cardSection}>
+                {workflowsLoading ? (
+                  <p style={styles.emptyText}>Loading logs...</p>
+                ) : (
+                  <div>
+                    {workflowFilterTab === 'certificates' && (
+                      certificates.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {certificates.map((c) => (
+                            <div key={c.id} style={styles.workflowLogCard}>
+                              <div>
+                                <span style={styles.workflowLogId}>ID: {c.id.substring(0, 8)}...</span>
+                                <strong style={{ fontSize: '12px', color: 'var(--text-primary)', marginLeft: '8px' }}>{c.certificate_type}</strong>
+                                {c.description && <p style={styles.workflowLogDesc}>{c.description}</p>}
+                                <span style={styles.workflowLogTime}>Requested: {new Date(c.created_at).toLocaleString()}</span>
+                              </div>
+                              <span style={styles.workflowLogStatusBadge(c.status)}>{c.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p style={styles.emptyText}>No certificate requests recorded.</p>
+                      )
+                    )}
+
+                    {workflowFilterTab === 'maintenance' && (
+                      maintenance.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {maintenance.map((m) => (
+                            <div key={m.id} style={styles.workflowLogCard}>
+                              <div>
+                                <span style={styles.workflowLogId}>ID: {m.id.substring(0, 8)}...</span>
+                                <strong style={{ fontSize: '12px', color: 'var(--text-primary)', marginLeft: '8px' }}>{m.category} at {m.location}</strong>
+                                {m.description && <p style={styles.workflowLogDesc}>{m.description}</p>}
+                                <span style={styles.workflowLogTime}>Requested: {new Date(m.created_at).toLocaleString()}</span>
+                              </div>
+                              <span style={styles.workflowLogStatusBadge(m.status)}>{m.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p style={styles.emptyText}>No maintenance tickets recorded.</p>
+                      )
+                    )}
+
+                    {workflowFilterTab === 'laboratory' && (
+                      laboratory.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {laboratory.map((l) => (
+                            <div key={l.id} style={styles.workflowLogCard}>
+                              <div>
+                                <span style={styles.workflowLogId}>ID: {l.id.substring(0, 8)}...</span>
+                                <strong style={{ fontSize: '12px', color: 'var(--text-primary)', marginLeft: '8px' }}>{l.lab_name}</strong>
+                                <p style={styles.workflowLogDesc}>Date: {l.date} • {l.start_time} to {l.end_time}</p>
+                                <span style={styles.workflowLogTime}>Booked: {new Date(l.created_at).toLocaleString()}</span>
+                              </div>
+                              <span style={styles.workflowLogStatusBadge(l.status)}>{l.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p style={styles.emptyText}>No laboratory bookings recorded.</p>
+                      )
+                    )}
+
+                    {workflowFilterTab === 'grievances' && (
+                      grievances.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {grievances.map((g) => (
+                            <div key={g.id} style={styles.workflowLogCard}>
+                              <div>
+                                <span style={styles.workflowLogId}>ID: {g.id.substring(0, 8)}...</span>
+                                <strong style={{ fontSize: '12px', color: 'var(--text-primary)', marginLeft: '8px' }}>{g.subject}</strong>
+                                <p style={styles.workflowLogDesc}>{g.description} {g.department && `• Dept: ${g.department}`}</p>
+                                <span style={styles.workflowLogTime}>Raised: {new Date(g.created_at).toLocaleString()}</span>
+                              </div>
+                              <span style={styles.workflowLogStatusBadge(g.status)}>{g.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p style={styles.emptyText}>No grievances recorded.</p>
+                      )
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

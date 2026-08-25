@@ -6,8 +6,15 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from workspace.models import Workspace
 from workspace.permissions import IsAuthenticatedOr401
-from .models import Task, Agent, TaskExecution, UserMCPServer
-from .serializers import TaskSerializer, AgentSerializer, TaskExecutionSerializer, UserMCPServerSerializer
+from .models import (
+    Task, Agent, TaskExecution, UserMCPServer,
+    CertificateRequest, MaintenanceTicket, LaboratoryBooking, GrievanceEscalation, InstitutionalPolicy
+)
+from .serializers import (
+    TaskSerializer, AgentSerializer, TaskExecutionSerializer, UserMCPServerSerializer,
+    CertificateRequestSerializer, MaintenanceTicketSerializer, LaboratoryBookingSerializer, GrievanceEscalationSerializer,
+    InstitutionalPolicySerializer
+)
 from .permissions import IsWorkspaceMemberForTask
 from .services.task_service import TaskService
 from .services.execution_service import ExecutionService
@@ -372,4 +379,82 @@ class UserMCPServerViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+
+class CertificateRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CertificateRequestSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        workspace_id = self.request.query_params.get('workspace_id')
+        if not workspace_id:
+            return CertificateRequest.objects.none()
+        from workspace.models import WorkspaceMember
+        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+            return CertificateRequest.objects.none()
+        return CertificateRequest.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
+
+
+class MaintenanceTicketViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = MaintenanceTicketSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        workspace_id = self.request.query_params.get('workspace_id')
+        if not workspace_id:
+            return MaintenanceTicket.objects.none()
+        from workspace.models import WorkspaceMember
+        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+            return MaintenanceTicket.objects.none()
+        return MaintenanceTicket.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
+
+
+class LaboratoryBookingViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = LaboratoryBookingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        workspace_id = self.request.query_params.get('workspace_id')
+        if not workspace_id:
+            return LaboratoryBooking.objects.none()
+        from workspace.models import WorkspaceMember
+        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+            return LaboratoryBooking.objects.none()
+        return LaboratoryBooking.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
+
+
+class GrievanceEscalationViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = GrievanceEscalationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        workspace_id = self.request.query_params.get('workspace_id')
+        if not workspace_id:
+            return GrievanceEscalation.objects.none()
+        from workspace.models import WorkspaceMember
+        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+            return GrievanceEscalation.objects.none()
+        return GrievanceEscalation.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
+
+
+class InstitutionalPolicyViewSet(viewsets.ModelViewSet):
+    serializer_class = InstitutionalPolicySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        workspace_id = self.request.query_params.get('workspace_id')
+        if not workspace_id:
+            return InstitutionalPolicy.objects.none()
+        from workspace.models import WorkspaceMember
+        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+            return InstitutionalPolicy.objects.none()
+        return InstitutionalPolicy.objects.filter(workspace_id=workspace_id).order_by('-priority')
+
+    def perform_create(self, serializer):
+        workspace_id = self.request.data.get('workspace')
+        from workspace.models import WorkspaceMember
+        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError("You are not a member of this workspace.")
+        serializer.save(workspace_id=workspace_id)
 

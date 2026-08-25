@@ -260,11 +260,19 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                 "ai_provider": workspace.ai_provider,
                 "ai_model": workspace.ai_model,
                 "system_prompt": workspace.system_prompt,
+                "context_window_limit": workspace.context_window_limit,
+                "institutional_knowledge_enabled": workspace.institutional_knowledge_enabled,
+                "policy_engine_enabled": workspace.policy_engine_enabled,
+                "workflow_execution_enabled": workspace.workflow_execution_enabled,
             }, status=status.HTTP_200_OK)
 
         ai_provider = request.data.get("ai_provider")
         ai_model = request.data.get("ai_model")
         system_prompt = request.data.get("system_prompt")
+        context_window_limit = request.data.get("context_window_limit")
+        institutional_knowledge_enabled = request.data.get("institutional_knowledge_enabled")
+        policy_engine_enabled = request.data.get("policy_engine_enabled")
+        workflow_execution_enabled = request.data.get("workflow_execution_enabled")
 
         SUPPORTED_PROVIDERS = ["simulated", "gemini", "groq", "nvidia_nim", "openclaw", "opencode"]
         if ai_provider is not None:
@@ -287,6 +295,24 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                 )
             workspace.system_prompt = trimmed
 
+        if context_window_limit is not None:
+            try:
+                workspace.context_window_limit = int(context_window_limit)
+            except ValueError:
+                return Response(
+                    {"error": "Context window limit must be an integer."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        if institutional_knowledge_enabled is not None:
+            workspace.institutional_knowledge_enabled = bool(institutional_knowledge_enabled)
+
+        if policy_engine_enabled is not None:
+            workspace.policy_engine_enabled = bool(policy_engine_enabled)
+
+        if workflow_execution_enabled is not None:
+            workspace.workflow_execution_enabled = bool(workflow_execution_enabled)
+
         workspace.save()
         return Response({
             "id": str(workspace.id),
@@ -294,6 +320,10 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             "ai_provider": workspace.ai_provider,
             "ai_model": workspace.ai_model,
             "system_prompt": workspace.system_prompt,
+            "context_window_limit": workspace.context_window_limit,
+            "institutional_knowledge_enabled": workspace.institutional_knowledge_enabled,
+            "policy_engine_enabled": workspace.policy_engine_enabled,
+            "workflow_execution_enabled": workspace.workflow_execution_enabled,
         }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='dm', url_name='dm', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])

@@ -3367,6 +3367,150 @@ class Phase5_2Tests(TestCase):
             )
 
 
+class InstitutionalIntelligenceTestCase(TestCase):
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from workspace.models import Workspace
+        self.user = User.objects.create_user(username="test_inst_user", password="password")
+        self.workspace = Workspace.objects.create(name="Inst Workspace", owner=self.user)
+        self.workspace.institutional_knowledge_enabled = True
+        self.workspace.policy_engine_enabled = True
+        self.workspace.workflow_execution_enabled = True
+        self.workspace.save()
+
+    def test_rag_chunking_and_retrieval(self):
+        from workspace.models import WorkspaceContextItem, WorkspaceContextItemChunk
+        from task.services.rag_service import RAGService
+
+        # Create institutional reference doc
+        doc = WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            context_type="INSTITUTIONAL_REFERENCE",
+            name="Policy Handbook",
+            normalized_content="Standard lab booking duration is 2 hours. The fee is 50 USD.\n\nApplications must be submitted online."
+        )
+
+        # Chunks should be auto-created via post-save signal
+        chunks = WorkspaceContextItemChunk.objects.filter(context_item=doc)
+        self.assertTrue(chunks.exists())
+
+        # Retrieve knowledge
+        results = RAGService.retrieve_trusted_knowledge(self.workspace, "What is the lab booking duration limit?")
+        self.assertTrue(len(results) > 0)
+        self.assertIn("2 hours", results[0]["content"])
+
+    def test_uncertainty_detector_missing_params(self):
+        from task.services.uncertainty_detector import UncertaintyDetector, UncertaintyStatus
+
+        # Missing required parameter certificate_type
+        missing = UncertaintyDetector.check_missing_info("certificate_requests.create_certificate_request", {})
+        self.assertIn("certificate_type", missing)
+
+        # All present
+        missing = UncertaintyDetector.check_missing_info("certificate_requests.create_certificate_request", {"certificate_type": "Migration"})
+        self.assertEqual(len(missing), 0)
+
+    def test_uncertainty_detector_conflicts(self):
+        from task.services.uncertainty_detector import UncertaintyDetector
+
+        chunks = [
+            {"source": "DocA.txt", "content": "Fee is 50 USD", "document_id": 1, "chunk_index": 0},
+            {"source": "DocB.txt", "content": "Fee is 100 USD", "document_id": 2, "chunk_index": 0}
+        ]
+        is_conflict = UncertaintyDetector.check_rag_conflicts(chunks, "What is the fee?")
+        self.assertTrue(is_conflict)
+
+        # Non-conflicting
+        chunks_ok = [
+            {"source": "DocA.txt", "content": "Fee is 50 USD", "document_id": 1, "chunk_index": 0},
+            {"source": "DocA.txt", "content": "Duration is 2 hours", "document_id": 1, "chunk_index": 1}
+        ]
+        is_conflict_ok = UncertaintyDetector.check_rag_conflicts(chunks_ok, "What is the fee?")
+        self.assertFalse(is_conflict_ok)
+
+    def test_policy_engine_evaluation(self):
+        from task.models import InstitutionalPolicy
+        from task.services.policy_engine import PolicyEngine
+
+        # Policy 1: DENY lab bookings for test_inst_user
+        policy = InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="No Lab Bookings Policy",
+            rules={
+                "target_resource": "laboratory_bookings.create_lab_booking",
+                "username_contains": "test_inst_user"
+            },
+            effect="DENY",
+            priority=10
+        )
+
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect, "DENY")
+
+        # Conflict resolution (Tie break priority same -> ESCALATE)
+        InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Allow Lab Bookings Policy",
+            rules={
+                "target_resource": "laboratory_bookings.create_lab_booking",
+                "username_contains": "test_inst_user"
+            },
+            effect="ALLOW",
+            priority=10
+        )
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect, "ESCALATE")
+
+    def test_laboratory_booking_overlaps(self):
+        from task.models import LaboratoryBooking
+        import datetime
+
+        # Create valid booking
+        b1 = LaboratoryBooking.objects.create(
+            workspace=self.workspace,
+            user=self.user,
+            lab_name="CS Lab",
+            date=datetime.date(2026, 9, 1),
+            start_time=datetime.time(10, 0),
+            end_time=datetime.time(12, 0),
+            status="CONFIRMED"
+        )
+
+        # Check overlapping check: same lab, same date, overlapping time (11:00 - 13:00)
+        overlapping = LaboratoryBooking.objects.filter(
+            workspace=self.workspace,
+            lab_name__iexact="CS Lab",
+            date=datetime.date(2026, 9, 1),
+            status='CONFIRMED',
+            start_time__lt=datetime.time(13, 0),
+            end_time__gt=datetime.time(11, 0)
+        )
+        self.assertTrue(overlapping.exists())
+
+        # Non-overlapping (12:00 - 14:00)
+        overlapping_no = LaboratoryBooking.objects.filter(
+            workspace=self.workspace,
+            lab_name__iexact="CS Lab",
+            date=datetime.date(2026, 9, 1),
+            status='CONFIRMED',
+            start_time__lt=datetime.time(14, 0),
+            end_time__gt=datetime.time(12, 0)
+        )
+        self.assertFalse(overlapping_no.exists())
+
+
+
 
 
 

@@ -1,7 +1,24 @@
+import os
 import sys
 import json
+import django
+
+# Initialize Django
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+try:
+    django.setup()
+except Exception as e:
+    sys.stderr.write(f"Django setup error: {str(e)}\n")
+    sys.stderr.flush()
+
+from django.contrib.auth.models import User
+from workspace.models import Workspace
+from task.models import MaintenanceTicket
 
 def main():
+    user_id = os.environ.get("SURGE_USER_ID")
+    workspace_id = os.environ.get("SURGE_WORKSPACE_ID")
+
     for line in sys.stdin:
         try:
             line_str = line.strip()
@@ -95,15 +112,82 @@ def main():
                     }
                 }
             elif method == "tools/call":
-                result = {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Error: The institutional backend connection is currently inactive. This tool is registered/discoverable but the underlying API or database is not connected."
-                        }
-                    ],
-                    "isError": True
-                }
+                params = req.get("params", {})
+                tool_name = params.get("name")
+                arguments = params.get("arguments", {})
+
+                if not user_id or not workspace_id:
+                    result = {"content": [{"type": "text", "text": "Error: User or Workspace context is missing in environment variables."}], "isError": True}
+                else:
+                    try:
+                        workspace = Workspace.objects.get(id=workspace_id)
+                        user = User.objects.get(id=user_id)
+                        
+                        if not workspace.workflow_execution_enabled:
+                            result = {"content": [{"type": "text", "text": "Error: Institutional workflow execution is disabled for this workspace."}], "isError": True}
+                        elif tool_name == "create_maintenance_ticket":
+                            category = arguments.get("category")
+                            description = arguments.get("description")
+                            location = arguments.get("location")
+                            
+                            ticket = MaintenanceTicket.objects.create(
+                                workspace=workspace,
+                                user=user,
+                                category=category,
+                                description=description,
+                                location=location,
+                                status='OPEN'
+                            )
+                            text = f"Successfully created maintenance ticket.\nID: {ticket.id}\nCategory: {ticket.category}\nLocation: {ticket.location}\nStatus: {ticket.status}"
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "list_maintenance_tickets":
+                            tickets = MaintenanceTicket.objects.filter(workspace=workspace, user=user)
+                            if tickets.exists():
+                                lines = [f"- {t.id}: {t.category} at {t.location} [{t.status}]" for t in tickets]
+                                text = "Your maintenance tickets:\n" + "\n".join(lines)
+                            else:
+                                text = "You have no maintenance tickets."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name in ["get_maintenance_ticket", "get_ticket_status"]:
+                            ticket_id = arguments.get("ticket_id")
+                            try:
+                                t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
+                                text = f"Maintenance Ticket Details:\nID: {t.id}\nCategory: {t.category}\nDescription: {t.description}\nLocation: {t.location}\nStatus: {t.status}\nCreated: {t.created_at.isoformat()}"
+                            except (MaintenanceTicket.DoesNotExist, ValueError):
+                                text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "update_maintenance_ticket":
+                            ticket_id = arguments.get("ticket_id")
+                            description = arguments.get("description")
+                            try:
+                                t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
+                                t.description = description
+                                t.save()
+                                text = f"Successfully updated maintenance ticket {t.id} description."
+                            except (MaintenanceTicket.DoesNotExist, ValueError):
+                                text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "close_maintenance_ticket":
+                            ticket_id = arguments.get("ticket_id")
+                            reason = arguments.get("reason", "")
+                            try:
+                                t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
+                                t.status = 'CLOSED'
+                                t.description += f"\n[Closure Reason: {reason}]"
+                                t.save()
+                                text = f"Successfully closed maintenance ticket {t.id}."
+                            except (MaintenanceTicket.DoesNotExist, ValueError):
+                                text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        else:
+                            result = {"content": [{"type": "text", "text": f"Error: Unknown tool '{tool_name}'"}], "isError": True}
+                    except Workspace.DoesNotExist:
+                        result = {"content": [{"type": "text", "text": "Error: Workspace not found."}], "isError": True}
+                    except User.DoesNotExist:
+                        result = {"content": [{"type": "text", "text": "Error: User not found."}], "isError": True}
+                    except Exception as ex:
+                        result = {"content": [{"type": "text", "text": f"Error: {str(ex)}"}], "isError": True}
+
                 res = {
                     "jsonrpc": "2.0",
                     "id": msg_id,

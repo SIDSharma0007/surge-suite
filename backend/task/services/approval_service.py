@@ -134,7 +134,7 @@ class ApprovalService:
         if is_mcp_or_builtin_tool:
             from .mcp.registry import MCPRegistry
             
-            mcp_registry = MCPRegistry()
+            mcp_registry = MCPRegistry(user=task.creator, workspace=task.workspace)
             required_mcp_servers = ExecutionService()._determine_required_mcp_servers(task.problem_statement, user=task.creator, is_real=True)
             mcp_tools = []
             if required_mcp_servers:

@@ -3,11 +3,29 @@ from .client import MCPClient
 from .config import MCP_SERVER_CONFIGS
 
 class MCPRegistry:
-    def __init__(self):
+    def __init__(self, user=None, workspace=None):
+        self.user = user
+        self.workspace = workspace
         self.clients = {}
         self.tools = {} # Maps prefixed_name -> (client, tool_info)
 
     def initialize_servers(self, server_names=None, user=None):
+        import os
+        resolved_user = user or self.user
+        resolved_workspace = self.workspace
+
+        # Build base environment
+        base_env = {}
+        if resolved_user:
+            base_env["SURGE_USER_ID"] = str(resolved_user.id)
+        if resolved_workspace:
+            base_env["SURGE_WORKSPACE_ID"] = str(resolved_workspace.id)
+
+        import sys
+        backend_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        base_env["DJANGO_SETTINGS_MODULE"] = "config.settings"
+        base_env["PYTHONPATH"] = backend_path
+
         # 1. Initialize built-in servers
         for cfg in MCP_SERVER_CONFIGS:
             name = cfg["name"]
@@ -15,7 +33,9 @@ class MCPRegistry:
                 continue
             command = cfg["command"]
             try:
-                client = MCPClient(name, command)
+                # Merge custom environment
+                env_copy = base_env.copy()
+                client = MCPClient(name, command, env_copy)
                 client.start()
                 
                 # Perform initialize handshake
@@ -43,9 +63,9 @@ class MCPRegistry:
                 print(f"Failed to startup MCP server '{name}': {str(e)}")
 
         # 2. Initialize custom enabled servers
-        if user:
+        if resolved_user:
             from task.models import UserMCPServer
-            custom_servers = UserMCPServer.objects.filter(user=user, is_enabled=True)
+            custom_servers = UserMCPServer.objects.filter(user=resolved_user, is_enabled=True)
             for srv in custom_servers:
                 name = srv.name
                 if server_names is not None and name not in server_names:
@@ -57,7 +77,9 @@ class MCPRegistry:
                 full_command = command + (args or [])
                 env = srv.configuration.get("env", {})
                 try:
-                    client = MCPClient(name, full_command, env)
+                    env_copy = base_env.copy()
+                    env_copy.update(env)
+                    client = MCPClient(name, full_command, env_copy)
                     client.start()
                     
                     init_res = client.send_request("initialize", {
@@ -88,7 +110,7 @@ class MCPRegistry:
             try:
                 res = client.send_request("tools/list")
                 if "error" in res:
-                    print(f"Error listing tools for MCP server '{name}': {res['error']}")
+                    print(f"Error getting tools for MCP server '{name}': {res['error']}")
                     continue
                 
                 result_payload = res.get("result", {})
@@ -113,24 +135,50 @@ class MCPRegistry:
         if prefixed_name not in self.tools:
             return {"error": f"Tool '{prefixed_name}' not found in MCP registry."}
 
-        if not approved:
-            tools_requiring_approval = {
-                "certificate_requests.create_certificate_request",
-                "certificate_requests.cancel_certificate_request",
-                "maintenance_tickets.create_maintenance_ticket",
-                "maintenance_tickets.update_maintenance_ticket",
-                "maintenance_tickets.close_maintenance_ticket",
-                "laboratory_bookings.create_lab_booking",
-                "laboratory_bookings.cancel_lab_booking",
-                "grievance_escalation.create_grievance",
-                "grievance_escalation.update_grievance",
-                "grievance_escalation.escalate_grievance",
-            }
-            if prefixed_name in tools_requiring_approval:
-                from task.services.capability_registry import ApprovalRequiredException
-                cmd_str = f"mcp:{prefixed_name}({json.dumps(arguments)})"
-                reason = f"Execution of the MCP tool '{prefixed_name}' requires human authorization."
-                raise ApprovalRequiredException(command=cmd_str, reason=reason, risk="HIGH")
+        # Check for missing parameters
+        from task.services.uncertainty_detector import UncertaintyDetector
+        missing = UncertaintyDetector.check_missing_info(prefixed_name, arguments)
+        if missing:
+            return {"error": f"Missing required parameters: {', '.join(missing)}. Please ask the user to clarify."}
+
+        # Check Policy Engine
+        if self.user and self.workspace:
+            from task.services.policy_engine import PolicyEngine
+            effect = PolicyEngine.evaluate(
+                workspace=self.workspace,
+                user=self.user,
+                action_type=prefixed_name,
+                resource_data=arguments
+            )
+            if effect == "DENY":
+                return {"error": f"Denied by institutional policy: Action '{prefixed_name}' is not allowed."}
+            elif effect == "ESCALATE":
+                return {"error": f"Escalated: Action '{prefixed_name}' was escalated by policy engine due to conflicts or safety rules."}
+            elif effect == "REQUIRES_APPROVAL":
+                if not approved:
+                    from task.services.capability_registry import ApprovalRequiredException
+                    cmd_str = f"mcp:{prefixed_name}({json.dumps(arguments)})"
+                    reason = f"Execution of the MCP tool '{prefixed_name}' requires human authorization based on institutional policies."
+                    raise ApprovalRequiredException(command=cmd_str, reason=reason, risk="HIGH")
+        else:
+            if not approved:
+                tools_requiring_approval = {
+                    "certificate_requests.create_certificate_request",
+                    "certificate_requests.cancel_certificate_request",
+                    "maintenance_tickets.create_maintenance_ticket",
+                    "maintenance_tickets.update_maintenance_ticket",
+                    "maintenance_tickets.close_maintenance_ticket",
+                    "laboratory_bookings.create_lab_booking",
+                    "laboratory_bookings.cancel_lab_booking",
+                    "grievance_escalation.create_grievance",
+                    "grievance_escalation.update_grievance",
+                    "grievance_escalation.escalate_grievance",
+                }
+                if prefixed_name in tools_requiring_approval:
+                    from task.services.capability_registry import ApprovalRequiredException
+                    cmd_str = f"mcp:{prefixed_name}({json.dumps(arguments)})"
+                    reason = f"Execution of the MCP tool '{prefixed_name}' requires human authorization."
+                    raise ApprovalRequiredException(command=cmd_str, reason=reason, risk="HIGH")
 
         client, tool_info = self.tools[prefixed_name]
         try:

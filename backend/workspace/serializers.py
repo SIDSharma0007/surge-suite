@@ -51,7 +51,9 @@ class WorkspaceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'owner', 'role', 'is_archived', 'system_prompt',
             'created_at', 'updated_at', 'archived_at', 'scheduled_deletion_at',
-            'ai_provider', 'ai_model', 'skills_count', 'context_count'
+            'ai_provider', 'ai_model', 'skills_count', 'context_count',
+            'context_window_limit', 'institutional_knowledge_enabled',
+            'policy_engine_enabled', 'workflow_execution_enabled'
         ]
         read_only_fields = [
             'id', 'owner', 'role', 'is_archived', 
