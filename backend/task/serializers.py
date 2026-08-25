@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Agent, Task, TaskExecution, Action, ExecutionEvent, HumanApprovalRequest
+from .models import Agent, Task, TaskExecution, Action, ExecutionEvent, HumanApprovalRequest, UserMCPServer
 
 class TaskUserSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='first_name', read_only=True)
@@ -136,3 +136,70 @@ class TaskSerializer(serializers.ModelSerializer):
         if value.owner != user and not value.memberships.filter(user=user).exists():
             raise serializers.ValidationError("You do not have access to this workspace.")
         return value
+
+
+class UserMCPServerSerializer(serializers.ModelSerializer):
+    configuration = serializers.JSONField()
+
+    class Meta:
+        model = UserMCPServer
+        fields = [
+            'id', 'name', 'description', 'configuration', 
+            'is_enabled', 'tools_metadata', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'tools_metadata', 'created_at', 'updated_at']
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        config = ret.get("configuration")
+        if isinstance(config, dict) and "env" in config and isinstance(config["env"], dict):
+            masked_env = {k: "••••••••" for k in config["env"]}
+            ret["configuration"] = {
+                **config,
+                "env": masked_env
+            }
+        return ret
+
+    def validate(self, data):
+        configuration = data.get("configuration")
+        if configuration:
+            from .utils.mcp_validator import validate_mcp_config, test_handshake_and_discover_tools
+            from django.core.exceptions import ValidationError as DjangoValidationError
+            
+            new_env = configuration.get("env", {}) or {}
+            old_env = {}
+            if self.instance:
+                old_config = self.instance.configuration or {}
+                old_env = old_config.get("env", {}) or {}
+                
+            resolved_env = {}
+            for k, v in new_env.items():
+                if v == "••••••••":
+                    resolved_env[k] = old_env.get(k, "")
+                else:
+                    resolved_env[k] = v
+                    
+            handshake_config = {
+                **configuration,
+                "env": resolved_env
+            }
+            
+            # Validate command structure and security restrictions
+            try:
+                validate_mcp_config(handshake_config)
+            except DjangoValidationError as e:
+                raise serializers.ValidationError({"configuration": e.message if hasattr(e, 'message') else str(e)})
+                
+            # Perform handshake check (which also discovers tools)
+            try:
+                tools = test_handshake_and_discover_tools(handshake_config)
+                # Store tools metadata in validation step
+                data["tools_metadata"] = tools
+            except DjangoValidationError as e:
+                raise serializers.ValidationError({"configuration": f"Handshake failed: {e.message if hasattr(e, 'message') else str(e)}"})
+                
+            # Save resolved config back into validated data
+            data["configuration"] = handshake_config
+            
+        return data
+

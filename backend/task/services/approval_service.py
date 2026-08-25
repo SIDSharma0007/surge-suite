@@ -118,62 +118,104 @@ class ApprovalService:
         task = approval.task
         execution = approval.execution
 
-        # Re-classify the EXACT stored command before any execution
-        registry = CapabilityRegistry()
-        tier = registry._classify_command(approval.command)
+        # Check if the approval was for an MCP/builtin tool rather than bash.execute
+        is_mcp_or_builtin_tool = False
+        tool_name = "bash.execute"
+        tool_args = {"command": approval.command}
+        
+        if approval.action and approval.action.input_data:
+            input_data = approval.action.input_data
+            if "tool_name" in input_data:
+                tool_name = input_data["tool_name"]
+                tool_args = input_data.get("arguments", {})
+                if tool_name != "bash.execute":
+                    is_mcp_or_builtin_tool = True
 
-        if tier == "BLOCKED":
-            # The command escalated to BLOCKED since the approval was created.
-            # Mark it as denied and record a security event.
-            approval.status = 'DENIED'
-            approval.resolved_at = timezone.now()
-            approval.resolved_by = resolving_user
-            approval.save()
+        if is_mcp_or_builtin_tool:
+            from .mcp.registry import MCPRegistry
+            
+            mcp_registry = MCPRegistry()
+            required_mcp_servers = ExecutionService()._determine_required_mcp_servers(task.problem_statement, user=task.creator, is_real=True)
+            mcp_tools = []
+            if required_mcp_servers:
+                mcp_registry.initialize_servers(server_names=required_mcp_servers, user=task.creator)
+                mcp_tools = mcp_registry.discover_tools()
+                
+            is_mcp = any(t['name'] == tool_name for t in mcp_tools)
+            
+            try:
+                if is_mcp:
+                    tool_result = mcp_registry.execute_tool(tool_name, tool_args, approved=True)
+                else:
+                    builtin_registry = CapabilityRegistry()
+                    tool_result = builtin_registry.execute_tool(tool_name, tool_args)
+            except Exception as e:
+                tool_result = {"error": f"Exception executing approved tool: {str(e)}"}
+        else:
+            # Re-classify the EXACT stored command before any execution
+            registry = CapabilityRegistry()
+            tier = registry._classify_command(approval.command)
 
-            self._record_event(approval, 'APPROVAL_SECURITY_BLOCKED', {
-                'reason': 'Command was re-classified as BLOCKED immediately before execution. Not executed.'
-            })
+            if tier == "BLOCKED":
+                # The command escalated to BLOCKED since the approval was created.
+                # Mark it as denied and record a security event.
+                approval.status = 'DENIED'
+                approval.resolved_at = timezone.now()
+                approval.resolved_by = resolving_user
+                approval.save()
 
-            # Mark task/execution FAILED — the approved-but-blocked command cannot proceed.
-            execution.status = 'FAILED'
-            execution.error = 'Approved command was classified as BLOCKED during pre-execution re-validation.'
-            execution.completed_at = timezone.now()
-            execution.save()
-            task.status = 'FAILED'
-            task.result = 'The approved shell command was blocked by the security policy during re-validation and was not executed.'
-            task.save()
+                self._record_event(approval, 'APPROVAL_SECURITY_BLOCKED', {
+                    'reason': 'Command was re-classified as BLOCKED immediately before execution. Not executed.'
+                })
 
-            raise ApprovalValidationError(
-                "The command has been blocked by the security policy and cannot be executed."
-            )
+                # Mark task/execution FAILED — the approved-but-blocked command cannot proceed.
+                execution.status = 'FAILED'
+                execution.error = 'Approved command was classified as BLOCKED during pre-execution re-validation.'
+                execution.completed_at = timezone.now()
+                execution.save()
+                task.status = 'FAILED'
+                task.result = 'The approved shell command was blocked by the security policy during re-validation and was not executed.'
+                task.save()
 
-        if tier == "SAFE":
-            # Edge case: the command was downgraded to SAFE since request creation.
-            # Still execute it, but note the tier change.
-            pass
+                raise ApprovalValidationError(
+                    "The command has been blocked by the security policy and cannot be executed."
+                )
 
-        # Execute the exact stored command
-        try:
-            tool_result = registry.handle_bash_execute({'command': approval.command}, approved=True)
-        except PermissionDenied as e:
-            # Execution blocked at runtime
-            approval.status = 'DENIED'
-            approval.resolved_at = timezone.now()
-            approval.resolved_by = resolving_user
-            approval.save()
-            self._record_event(approval, 'APPROVAL_SECURITY_BLOCKED', {
-                'reason': f'Runtime permission denied: {str(e)}'
-            })
-            raise ApprovalValidationError(f"Execution blocked by security policy: {str(e)}")
+            if tier == "SAFE":
+                # Edge case: the command was downgraded to SAFE since request creation.
+                # Still execute it, but note the tier change.
+                pass
+
+            # Execute the exact stored command
+            try:
+                tool_result = registry.handle_bash_execute({'command': approval.command}, approved=True)
+            except PermissionDenied as e:
+                # Execution blocked at runtime
+                approval.status = 'DENIED'
+                approval.resolved_at = timezone.now()
+                approval.resolved_by = resolving_user
+                approval.save()
+                self._record_event(approval, 'APPROVAL_SECURITY_BLOCKED', {
+                    'reason': f'Runtime permission denied: {str(e)}'
+                })
+                raise ApprovalValidationError(f"Execution blocked by security policy: {str(e)}")
 
         # Store the execution result on the approval record
         # Use sanitized_display_command for the stored result key (never raw command in result)
-        approval.execution_result = {
-            'exit_code': tool_result.get('exit_code'),
-            'stdout': (tool_result.get('stdout') or '')[:5000],
-            'stderr': (tool_result.get('stderr') or '')[:2000],
-            'error': tool_result.get('error'),
-        }
+        if is_mcp_or_builtin_tool:
+            approval.execution_result = {
+                'exit_code': 0 if "error" not in tool_result else 1,
+                'stdout': (tool_result.get('result') or '')[:5000],
+                'stderr': '',
+                'error': tool_result.get('error'),
+            }
+        else:
+            approval.execution_result = {
+                'exit_code': tool_result.get('exit_code'),
+                'stdout': (tool_result.get('stdout') or '')[:5000],
+                'stderr': (tool_result.get('stderr') or '')[:2000],
+                'error': tool_result.get('error'),
+            }
         approval.status = 'APPROVED'
         approval.resolved_at = timezone.now()
         approval.resolved_by = resolving_user

@@ -7,7 +7,8 @@ class MCPRegistry:
         self.clients = {}
         self.tools = {} # Maps prefixed_name -> (client, tool_info)
 
-    def initialize_servers(self, server_names=None):
+    def initialize_servers(self, server_names=None, user=None):
+        # 1. Initialize built-in servers
         for cfg in MCP_SERVER_CONFIGS:
             name = cfg["name"]
             if server_names is not None and name not in server_names:
@@ -41,6 +42,46 @@ class MCPRegistry:
             except Exception as e:
                 print(f"Failed to startup MCP server '{name}': {str(e)}")
 
+        # 2. Initialize custom enabled servers
+        if user:
+            from task.models import UserMCPServer
+            custom_servers = UserMCPServer.objects.filter(user=user, is_enabled=True)
+            for srv in custom_servers:
+                name = srv.name
+                if server_names is not None and name not in server_names:
+                    continue
+                if name in self.clients:
+                    continue
+                command = srv.configuration.get("command", [])
+                args = srv.configuration.get("args", [])
+                full_command = command + (args or [])
+                env = srv.configuration.get("env", {})
+                try:
+                    client = MCPClient(name, full_command, env)
+                    client.start()
+                    
+                    init_res = client.send_request("initialize", {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "SurgeSuiteClient", "version": "1.0"}
+                    })
+                    
+                    if "error" in init_res:
+                        print(f"Error initializing custom MCP server '{name}': {init_res['error']}")
+                        client.stop()
+                        continue
+                        
+                    if client.process and client.process.stdin:
+                        client.process.stdin.write(json.dumps({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/initialized"
+                        }) + "\n")
+                        client.process.stdin.flush()
+                        
+                    self.clients[name] = client
+                except Exception as e:
+                    print(f"Failed to startup custom MCP server '{name}': {str(e)}")
+
     def discover_tools(self) -> list:
         discovered = []
         for name, client in self.clients.items():
@@ -68,9 +109,28 @@ class MCPRegistry:
                 print(f"Error discovering tools for MCP server '{name}': {str(e)}")
         return discovered
 
-    def execute_tool(self, prefixed_name: str, arguments: dict) -> dict:
+    def execute_tool(self, prefixed_name: str, arguments: dict, approved: bool = False) -> dict:
         if prefixed_name not in self.tools:
             return {"error": f"Tool '{prefixed_name}' not found in MCP registry."}
+
+        if not approved:
+            tools_requiring_approval = {
+                "certificate_requests.create_certificate_request",
+                "certificate_requests.cancel_certificate_request",
+                "maintenance_tickets.create_maintenance_ticket",
+                "maintenance_tickets.update_maintenance_ticket",
+                "maintenance_tickets.close_maintenance_ticket",
+                "laboratory_bookings.create_lab_booking",
+                "laboratory_bookings.cancel_lab_booking",
+                "grievance_escalation.create_grievance",
+                "grievance_escalation.update_grievance",
+                "grievance_escalation.escalate_grievance",
+            }
+            if prefixed_name in tools_requiring_approval:
+                from task.services.capability_registry import ApprovalRequiredException
+                cmd_str = f"mcp:{prefixed_name}({json.dumps(arguments)})"
+                reason = f"Execution of the MCP tool '{prefixed_name}' requires human authorization."
+                raise ApprovalRequiredException(command=cmd_str, reason=reason, risk="HIGH")
 
         client, tool_info = self.tools[prefixed_name]
         try:
@@ -105,3 +165,38 @@ class MCPRegistry:
         self.clients.clear()
         self.tools.clear()
 class_name = "MCPRegistry"
+
+
+def get_all_configs(user=None):
+    """
+    Returns all MCP configurations, including both built-ins and custom user-configured servers
+    (both enabled and disabled).
+    """
+    configs = []
+    
+    # 1. Add built-ins
+    for cfg in MCP_SERVER_CONFIGS:
+        configs.append({
+            "name": cfg["name"],
+            "command": cfg["command"],
+            "env": {},
+            "is_custom": False,
+            "is_enabled": True,
+            "tools": cfg.get("tools", [])
+        })
+        
+    # 2. Add user's custom servers
+    if user:
+        from task.models import UserMCPServer
+        custom_servers = UserMCPServer.objects.filter(user=user)
+        for srv in custom_servers:
+            configs.append({
+                "name": srv.name,
+                "command": srv.configuration.get("command", []),
+                "env": srv.configuration.get("env", {}),
+                "is_custom": True,
+                "is_enabled": srv.is_enabled,
+                "tools": srv.tools_metadata or []
+            })
+            
+    return configs

@@ -126,6 +126,37 @@ class UserProviderCredential(models.Model):
         return f"{self.user.username} - {self.provider}"
 
 
+class UserMCPServer(models.Model):
+    """Model representing a user-configured MCP server.
+
+    Fields:
+        user: Owner of the MCP configuration.
+        name: Unique name for the MCP server within the user's scope.
+        description: Optional human‑readable description.
+        configuration: Full configuration dict (command, env vars, etc.).
+        is_enabled: Whether the server participates in relevance selection.
+        tools_metadata: Cached list of tools exposed by this server.
+        created_at / updated_at: Timestamps.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mcp_servers')
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    configuration = models.JSONField(default=dict, blank=True)
+    is_enabled = models.BooleanField(default=True)
+    tools_metadata = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'name')
+
+    def __str__(self):
+        return f"{self.name} (User: {self.user.username})"
+
+
+
+
 class HumanApprovalRequest(models.Model):
     """
     Represents a request for human authorization before executing a shell command

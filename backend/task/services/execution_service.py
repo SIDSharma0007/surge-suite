@@ -45,6 +45,16 @@ class ExecutionService:
     def _mcp_tool_directly_satisfies(self, tool_name: str, tool_description: str, task_statement: str) -> bool:
         statement_lower = task_statement.lower()
         
+        server_name = tool_name.split(".")[0] if "." in tool_name else ""
+        if server_name == "certificate_requests":
+            return any(k in statement_lower for k in ["certificate", "cert"])
+        if server_name == "maintenance_tickets":
+            return any(k in statement_lower for k in ["maintenance", "ticket", "room", "facility", "broken", "leak", "repair", "fix"])
+        if server_name == "laboratory_bookings":
+            return any(k in statement_lower for k in ["laboratory", "lab", "booking", "book"])
+        if server_name == "grievance_escalation":
+            return any(k in statement_lower for k in ["grievance", "complaint", "escalate", "escalation"])
+
         if tool_name == "filesystem.list_directory":
             # list_directory is suitable if task asks to list, show, inspect files/directories,
             # or check if a file exists.
@@ -84,17 +94,19 @@ class ExecutionService:
             
         return False
 
-    def _determine_required_mcp_servers(self, task_statement: str, is_real: bool = True) -> list[str]:
+    def _determine_required_mcp_servers(self, task_statement: str, user=None, is_real: bool = True) -> list[str]:
         if not is_real:
             # Under simulated test mode, allow all configured servers so we don't break existing framework tests
             from .mcp.config import MCP_SERVER_CONFIGS
             return [cfg["name"] for cfg in MCP_SERVER_CONFIGS]
 
-        from .mcp.config import MCP_SERVER_CONFIGS
+        from .mcp.registry import get_all_configs
+        configs = get_all_configs(user)
         required_servers = []
-        for cfg in MCP_SERVER_CONFIGS:
+        for cfg in configs:
+            if not cfg.get("is_enabled", True):
+                continue
             name = cfg["name"]
-            # Expose the server if any of its tools is relevant
             tools = cfg.get("tools", [])
             is_relevant = False
             for t in tools:
@@ -563,13 +575,13 @@ class ExecutionService:
             metadata=sanitize_data({'message': 'Discovering dynamic MCP tools...'}, resolved_key)
         )
 
-        required_mcp_servers = self._determine_required_mcp_servers(task.problem_statement, is_real=is_real)
+        required_mcp_servers = self._determine_required_mcp_servers(task.problem_statement, user=task.creator, is_real=is_real)
 
         mcp_registry = MCPRegistry()
         mcp_tools = []
         if required_mcp_servers:
             try:
-                mcp_registry.initialize_servers(server_names=required_mcp_servers)
+                mcp_registry.initialize_servers(server_names=required_mcp_servers, user=task.creator)
                 mcp_tools = mcp_registry.discover_tools()
             except Exception as e:
                 ExecutionEvent.objects.create(
@@ -1325,17 +1337,25 @@ class ExecutionService:
         # Inject approval outcome
         if is_approved:
             tool_result = tool_result_or_denial
+            tool_name = "bash.execute"
+            tool_args = {"command": sanitized_cmd}
+            if approval.action and approval.action.input_data:
+                input_data = approval.action.input_data
+                if "tool_name" in input_data:
+                    tool_name = input_data["tool_name"]
+                    tool_args = input_data.get("arguments", {})
+
             conversation_history.append(
-                f"Model Request: {json.dumps({'tool_call': {'name': 'bash.execute', 'arguments': {'command': sanitized_cmd}}})}"
+                f"Model Request: {json.dumps({'tool_call': {'name': tool_name, 'arguments': tool_args}})}"
             )
             conversation_history.append(
-                f"Tool Result (bash.execute): {json.dumps(sanitize_data(tool_result, resolved_key))}\n"
-                "[Human approval was granted for the exact requested command. "
-                "The command was executed and the result above is available.]"
+                f"Tool Result ({tool_name}): {json.dumps(sanitize_data(tool_result, resolved_key))}\n"
+                "[Human approval was granted for the exact requested command/tool. "
+                "The command/tool was executed and the result above is available.]"
             )
             executed_actions.append({
-                "tool_name": "bash.execute",
-                "arguments": sanitize_data({"command": sanitized_cmd}, resolved_key),
+                "tool_name": tool_name,
+                "arguments": sanitize_data(tool_args, resolved_key),
                 "result": sanitize_data(tool_result, resolved_key),
                 "status": "FAILED" if "error" in tool_result else "SUCCESS"
             })
@@ -1346,13 +1366,13 @@ class ExecutionService:
         from .mcp.registry import MCPRegistry
         from .capability_registry import CapabilityRegistry
 
-        required_mcp_servers = self._determine_required_mcp_servers(task.problem_statement, is_real=is_real)
+        required_mcp_servers = self._determine_required_mcp_servers(task.problem_statement, user=task.creator, is_real=is_real)
 
         mcp_registry = MCPRegistry()
         mcp_tools = []
         if required_mcp_servers:
             try:
-                mcp_registry.initialize_servers(server_names=required_mcp_servers)
+                mcp_registry.initialize_servers(server_names=required_mcp_servers, user=task.creator)
                 mcp_tools = mcp_registry.discover_tools()
             except Exception:
                 mcp_tools = []

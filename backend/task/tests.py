@@ -2445,7 +2445,7 @@ class Phase5Tests(TestCase):
 
             execution = exec_service.execute_task(task, user=self.user)
             self.assertEqual(execution.status, 'COMPLETED')
-            mock_registry_inst.initialize_servers.assert_called_once_with(server_names=['filesystem'])
+            mock_registry_inst.initialize_servers.assert_called_once_with(server_names=['filesystem'], user=self.user)
 
     # 3. An unavailable relevant MCP falls back to Bash when Bash can safely accomplish the task.
     @patch('requests.post')
@@ -3010,7 +3010,362 @@ class Phase5Tests(TestCase):
 
             # Execution must finally reach COMPLETED
             self.assertEqual(execution.status, 'COMPLETED')
+            # Execution must finally reach COMPLETED
+            self.assertEqual(execution.status, 'COMPLETED')
             self.assertEqual(task.status, 'COMPLETED')
+
+
+class Phase5_2Tests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='phase5_2_user', password='password')
+
+    def test_validate_mcp_config_valid(self):
+        from task.utils.mcp_validator import validate_mcp_config
+        config = {
+            "command": ["python", "-m", "http.server"],
+            "env": {"PORT": "8080"}
+        }
+        # Should pass without raising ValidationError
+        validate_mcp_config(config)
+
+    def test_validate_mcp_config_invalid_executable(self):
+        from task.utils.mcp_validator import validate_mcp_config
+        from django.core.exceptions import ValidationError
+        
+        # Not whitelisted executable
+        config1 = {"command": ["bash", "-c", "echo hello"]}
+        with self.assertRaises(ValidationError) as ctx:
+            validate_mcp_config(config1)
+        self.assertIn("blocked", str(ctx.exception).lower())
+
+    def test_validate_mcp_config_dangerous_argument(self):
+        from task.utils.mcp_validator import validate_mcp_config
+        from django.core.exceptions import ValidationError
+        
+        # Prohibited command word executed directly
+        config2 = {"command": ["rm", "-rf", "/"]}
+        with self.assertRaises(ValidationError) as ctx:
+            validate_mcp_config(config2)
+        self.assertIn("blocked", str(ctx.exception).lower())
+
+    def test_validate_mcp_config_shell_metacharacters(self):
+        from task.utils.mcp_validator import validate_mcp_config
+        from django.core.exceptions import ValidationError
+        
+        # Shell metacharacter
+        config3 = {"command": ["python", "app.py", ";", "ls"]}
+        with self.assertRaises(ValidationError) as ctx:
+            validate_mcp_config(config3)
+        self.assertIn("Shell metacharacters (e.g. ';') are prohibited", str(ctx.exception))
+
+    def test_user_mcp_server_serializer_masking(self):
+        from task.models import UserMCPServer
+        from task.serializers import UserMCPServerSerializer
+        
+        server = UserMCPServer.objects.create(
+            user=self.user,
+            name="test-server",
+            configuration={
+                "command": ["python", "app.py"],
+                "env": {
+                    "API_KEY": "supersecret123",
+                    "OTHER_VAR": "non-secret"
+                }
+            }
+        )
+        serializer = UserMCPServerSerializer(server)
+        data = serializer.data
+        env = data["configuration"]["env"]
+        # All env values must be masked
+        self.assertEqual(env["API_KEY"], "••••••••")
+        self.assertEqual(env["OTHER_VAR"], "••••••••")
+
+    @patch('task.utils.mcp_validator.test_handshake_and_discover_tools')
+    def test_user_mcp_server_serializer_update_preserves_secrets(self, mock_handshake):
+        from task.models import UserMCPServer
+        from task.serializers import UserMCPServerSerializer
+        
+        mock_handshake.return_value = [{"name": "tool1", "description": "tool one"}]
+        
+        server = UserMCPServer.objects.create(
+            user=self.user,
+            name="test-server",
+            configuration={
+                "command": ["python", "app.py"],
+                "env": {
+                    "SECRET_KEY": "supersecret123",
+                    "NORMAL_VAR": "normal"
+                }
+            }
+        )
+        
+        # Frontend sends back configuration with masked secrets and a changed non-secret
+        update_data = {
+            "name": "test-server-updated",
+            "configuration": {
+                "command": ["python", "app.py"],
+                "env": {
+                    "SECRET_KEY": "••••••••",
+                    "NORMAL_VAR": "changed"
+                }
+            }
+        }
+        
+        serializer = UserMCPServerSerializer(server, data=update_data, partial=True)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        updated_server = serializer.save()
+        
+        # Verify the database has the preserved old secret but updated normal value
+        self.assertEqual(updated_server.configuration["env"]["SECRET_KEY"], "supersecret123")
+        self.assertEqual(updated_server.configuration["env"]["NORMAL_VAR"], "changed")
+        # Verify tools_metadata is populated from handshake mock
+        self.assertEqual(updated_server.tools_metadata, [{"name": "tool1", "description": "tool one"}])
+
+    @patch('task.services.mcp.client.MCPClient')
+    def test_test_handshake_and_discover_tools_success(self, mock_client_class):
+        from task.utils.mcp_validator import test_handshake_and_discover_tools
+        
+        mock_client = MagicMock()
+        mock_client.send_request.side_effect = [
+            {"result": {"protocolVersion": "2024-11-05"}}, # initialize
+            {"result": {"tools": [{"name": "add", "description": "add numbers"}]}} # tools/list
+        ]
+        mock_client_class.return_value = mock_client
+        
+        config = {
+            "command": ["python", "app.py"],
+            "env": {"TEST": "true"}
+        }
+        tools = test_handshake_and_discover_tools(config)
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0]["name"], "add")
+        mock_client.start.assert_called_once()
+        mock_client.stop.assert_called_once()
+
+    def test_custom_mcp_relevance_selection(self):
+        from task.services.execution_service import ExecutionService
+        from task.models import UserMCPServer
+        
+        # Create an enabled custom server with relevance metadata
+        UserMCPServer.objects.create(
+            user=self.user,
+            name="weather-mcp",
+            is_enabled=True,
+            tools_metadata=[{
+                "name": "get_temperature",
+                "description": "Gets temperature for a city"
+            }],
+            configuration={"command": ["python", "weather.py"]}
+        )
+        
+        # Create a disabled custom server with relevance metadata
+        UserMCPServer.objects.create(
+            user=self.user,
+            name="ignored-mcp",
+            is_enabled=False,
+            tools_metadata=[{
+                "name": "ignored_tool",
+                "description": "Calculates math equations"
+            }],
+            configuration={"command": ["python", "math.py"]}
+        )
+        
+        exec_service = ExecutionService()
+        
+        # Relevance test: weather query
+        servers = exec_service._determine_required_mcp_servers("What is the temperature in Miami?", user=self.user, is_real=True)
+        self.assertIn("weather-mcp", servers)
+        self.assertNotIn("ignored-mcp", servers)
+        
+        # Relevance test: math query (should not match disabled server)
+        servers_math = exec_service._determine_required_mcp_servers("Solve 2+2 math equations", user=self.user, is_real=True)
+        self.assertNotIn("ignored-mcp", servers_math)
+
+    def test_custom_mcp_validation_rules(self):
+        from task.utils.mcp_validator import validate_mcp_config
+        from django.core.exceptions import ValidationError
+
+        # Valid commands with args and env
+        valid_configs = [
+            {"command": ["uvx", "mcp-server-fetch"], "args": [], "env": {}},
+            {"command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"], "args": [], "env": {}},
+            {"command": ["pnpm", "dlx", "some-mcp-server"], "args": ["--port", "90"], "env": {"PORT": "90"}},
+            {"command": ["bun", "run", "server.ts"], "args": [], "env": {}},
+            {"command": ["deno", "run", "server.ts"], "args": [], "env": {}},
+            {"command": ["pip", "install", "some-package"], "args": [], "env": {}},
+        ]
+        for cfg in valid_configs:
+            try:
+                validate_mcp_config(cfg)
+            except ValidationError as e:
+                self.fail(f"Config {cfg} should be valid, but failed validation: {str(e)}")
+
+        # Blocked executables
+        invalid_executables = [
+            {"command": ["sudo", "uvx", "mcp"], "args": [], "env": {}},
+            {"command": ["bash", "-c", "echo"], "args": [], "env": {}},
+            {"command": ["sh", "test.sh"], "args": [], "env": {}},
+            {"command": ["rm", "-rf", "/"], "args": [], "env": {}},
+            {"command": ["curl", "http://google.com"], "args": [], "env": {}},
+        ]
+        for cfg in invalid_executables:
+            with self.assertRaises(ValidationError):
+                validate_mcp_config(cfg)
+
+        # Prohibited shell metacharacters in command or args
+        invalid_metachars = [
+            {"command": ["python", "server.py; rm -rf /"], "args": [], "env": {}},
+            {"command": ["node", "index.js"], "args": ["&&", "echo"], "env": {}},
+            {"command": ["python", "server.py"], "args": ["|", "grep", "foo"], "env": {}},
+        ]
+        for cfg in invalid_metachars:
+            with self.assertRaises(ValidationError):
+                validate_mcp_config(cfg)
+
+    def test_discover_six_builtin_servers(self):
+        from task.services.mcp.registry import get_all_configs
+        configs = get_all_configs(user=self.user)
+        builtin_names = [cfg["name"] for cfg in configs if not cfg.get("is_custom")]
+        
+        expected_builtins = {
+            "filesystem", "search", "certificate_requests",
+            "maintenance_tickets", "laboratory_bookings", "grievance_escalation"
+        }
+        for name in expected_builtins:
+            self.assertIn(name, builtin_names)
+
+    def test_relevance_selection_institutional_servers(self):
+        exec_service = ExecutionService()
+
+        # Certificate requests
+        srvs1 = exec_service._determine_required_mcp_servers("How do I request a new certificate?", user=self.user, is_real=True)
+        self.assertIn("certificate_requests", srvs1)
+
+        # Maintenance tickets
+        srvs2 = exec_service._determine_required_mcp_servers("My hostel fan is broken.", user=self.user, is_real=True)
+        self.assertIn("maintenance_tickets", srvs2)
+
+        # Laboratory bookings
+        srvs3 = exec_service._determine_required_mcp_servers("Book the chemistry lab tomorrow from 2 to 4.", user=self.user, is_real=True)
+        self.assertIn("laboratory_bookings", srvs3)
+
+        # Grievance escalation
+        srvs4 = exec_service._determine_required_mcp_servers("I want to escalate a complaint about my department.", user=self.user, is_real=True)
+        self.assertIn("grievance_escalation", srvs4)
+
+    @patch('task.services.mcp.client.MCPClient.send_request')
+    def test_hitl_approval_mcp_tool_execution(self, mock_send):
+        from task.services.mcp.registry import MCPRegistry
+        from task.services.capability_registry import ApprovalRequiredException
+        from task.services.approval_service import ApprovalService
+        from task.models import Task, HumanApprovalRequest, Action
+        
+        mcp_registry = MCPRegistry()
+        # Initialize and populate tools manually to simulate active servers
+        mock_client = MagicMock()
+        mock_client.send_request.return_value = {
+            "result": {
+                "content": [{"type": "text", "text": "Mock success"}]
+            }
+        }
+        mcp_registry.tools = {
+            "certificate_requests.create_certificate_request": (mock_client, {
+                "name": "certificate_requests.create_certificate_request",
+                "server": "certificate_requests",
+                "original_name": "create_certificate_request"
+            })
+        }
+
+        # 1. Unapproved tool call raises ApprovalRequiredException
+        with self.assertRaises(ApprovalRequiredException):
+            mcp_registry.execute_tool(
+                "certificate_requests.create_certificate_request",
+                {"certificate_type": "Migration"},
+                approved=False
+            )
+
+        # 2. Approved tool call executes successfully via standard RPC client
+        mock_send.return_value = {
+            "result": {
+                "content": [{"type": "text", "text": "Mock success"}]
+            }
+        }
+        res = mcp_registry.execute_tool(
+            "certificate_requests.create_certificate_request",
+            {"certificate_type": "Migration"},
+            approved=True
+        )
+        self.assertEqual(res.get("result"), "Mock success")
+
+        # 3. Test ApprovalService integration
+        from workspace.models import Workspace
+        from task.models import Agent
+        workspace = Workspace.objects.create(name="Test WS", owner=self.user)
+        agent = Agent.objects.create(
+            name="Test Agent",
+            provider="simulated",
+            model="dev-mock",
+            status="ACTIVE"
+        )
+        task = Task.objects.create(
+            workspace=workspace,
+            creator=self.user,
+            problem_statement="Request certificate",
+            assigned_agent=agent,
+            status="PENDING"
+        )
+        execution = TaskExecution.objects.create(
+            task=task,
+            agent=agent,
+            status="RUNNING"
+        )
+        action = Action.objects.create(
+            execution=execution,
+            agent=agent,
+            action_type="execute_tool",
+            status="RUNNING",
+            input_data={
+                "tool_name": "certificate_requests.create_certificate_request",
+                "arguments": {"certificate_type": "Migration"}
+            }
+        )
+        approval_req = HumanApprovalRequest.objects.create(
+            task=task,
+            execution=execution,
+            workspace=task.workspace,
+            requested_by=self.user,
+            action=action,
+            command="mcp:certificate_requests.create_certificate_request",
+            sanitized_display_command="mcp:certificate_requests.create_certificate_request",
+            status="PENDING"
+        )
+
+        approval_service = ApprovalService()
+        with patch('task.services.mcp.registry.MCPRegistry.discover_tools') as mock_discover, \
+             patch('task.services.mcp.registry.MCPRegistry.execute_tool') as mock_exec:
+            
+            mock_discover.return_value = [{
+                "name": "certificate_requests.create_certificate_request",
+                "server": "certificate_requests",
+                "description": "Create certificate request",
+                "input_schema": {}
+            }]
+            mock_exec.return_value = {"result": "Connection inactive warning"}
+            
+            # Resolve approval (which executes tool)
+            approval_service.resolve_approve(
+                approval_id=approval_req.id,
+                task_id=task.id,
+                resolving_user=self.user
+            )
+            
+            # Assert custom execute_tool was called with approved=True
+            mock_exec.assert_called_once_with(
+                "certificate_requests.create_certificate_request",
+                {"certificate_type": "Migration"},
+                approved=True
+            )
+
 
 
 
