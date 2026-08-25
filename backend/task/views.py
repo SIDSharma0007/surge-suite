@@ -389,8 +389,8 @@ class CertificateRequestViewSet(viewsets.ReadOnlyModelViewSet):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
             return CertificateRequest.objects.none()
-        from workspace.models import WorkspaceMember
-        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+        from workspace.models import WorkspaceMembership
+        if not WorkspaceMembership.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
             return CertificateRequest.objects.none()
         return CertificateRequest.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
 
@@ -403,8 +403,8 @@ class MaintenanceTicketViewSet(viewsets.ReadOnlyModelViewSet):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
             return MaintenanceTicket.objects.none()
-        from workspace.models import WorkspaceMember
-        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+        from workspace.models import WorkspaceMembership
+        if not WorkspaceMembership.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
             return MaintenanceTicket.objects.none()
         return MaintenanceTicket.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
 
@@ -417,8 +417,8 @@ class LaboratoryBookingViewSet(viewsets.ReadOnlyModelViewSet):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
             return LaboratoryBooking.objects.none()
-        from workspace.models import WorkspaceMember
-        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+        from workspace.models import WorkspaceMembership
+        if not WorkspaceMembership.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
             return LaboratoryBooking.objects.none()
         return LaboratoryBooking.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
 
@@ -431,8 +431,8 @@ class GrievanceEscalationViewSet(viewsets.ReadOnlyModelViewSet):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
             return GrievanceEscalation.objects.none()
-        from workspace.models import WorkspaceMember
-        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+        from workspace.models import WorkspaceMembership
+        if not WorkspaceMembership.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
             return GrievanceEscalation.objects.none()
         return GrievanceEscalation.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
 
@@ -445,15 +445,15 @@ class InstitutionalPolicyViewSet(viewsets.ModelViewSet):
         workspace_id = self.request.query_params.get('workspace_id')
         if not workspace_id:
             return InstitutionalPolicy.objects.none()
-        from workspace.models import WorkspaceMember
-        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+        from workspace.models import WorkspaceMembership
+        if not WorkspaceMembership.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
             return InstitutionalPolicy.objects.none()
         return InstitutionalPolicy.objects.filter(workspace_id=workspace_id).order_by('-priority')
 
     def perform_create(self, serializer):
         workspace_id = self.request.data.get('workspace')
-        from workspace.models import WorkspaceMember
-        if not WorkspaceMember.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
+        from workspace.models import WorkspaceMembership
+        if not WorkspaceMembership.objects.filter(workspace_id=workspace_id, user=self.request.user).exists():
             from rest_framework.exceptions import ValidationError
             raise ValidationError("You are not a member of this workspace.")
         serializer.save(workspace_id=workspace_id)

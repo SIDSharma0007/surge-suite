@@ -3509,6 +3509,70 @@ class InstitutionalIntelligenceTestCase(TestCase):
         )
         self.assertFalse(overlapping_no.exists())
 
+    def test_workflow_viewsets_isolation(self):
+        from rest_framework.test import APIClient
+        from workspace.models import Workspace, WorkspaceMembership
+        from task.models import CertificateRequest
+        from django.contrib.auth.models import User
+
+        # Create another user and workspace
+        other_user = User.objects.create_user(username="other_inst_user", password="password")
+        other_workspace = Workspace.objects.create(name="Other Workspace", owner=other_user)
+        
+        # Create certificates in both workspaces
+        c1 = CertificateRequest.objects.create(
+            workspace=self.workspace,
+            user=self.user,
+            certificate_type="Migration",
+            status="PENDING"
+        )
+        c2 = CertificateRequest.objects.create(
+            workspace=other_workspace,
+            user=other_user,
+            certificate_type="Enrollment",
+            status="PENDING"
+        )
+
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+
+        # Ensure WorkspaceMembership exists for self.user in self.workspace
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.user, role="MEMBER")
+
+        # 1. As self.user (who is member of self.workspace), list certificates for self.workspace
+        response = client.get(f"/api/v1/workflows/certificates/?workspace_id={self.workspace.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], str(c1.id))
+
+        # 2. Try to list certificates for other_workspace (where self.user is not a member)
+        response_other = client.get(f"/api/v1/workflows/certificates/?workspace_id={other_workspace.id}")
+        self.assertEqual(response_other.status_code, 200)
+        self.assertEqual(len(response_other.data), 0)  # returns empty queryset
+
+        # 3. Create a policy for self.workspace
+        policy_data = {
+            "name": "Test Policy",
+            "effect": "DENY",
+            "priority": 5,
+            "rules": {"target_resource": "*"},
+            "workspace": str(self.workspace.id)
+        }
+        response_policy = client.post("/api/v1/mcp/policies/", policy_data, format="json")
+        self.assertEqual(response_policy.status_code, 201)
+
+        # 4. Try to create a policy for other_workspace (should fail verification check)
+        policy_data_other = {
+            "name": "Bad Policy",
+            "effect": "ALLOW",
+            "priority": 1,
+            "rules": {},
+            "workspace": str(other_workspace.id)
+        }
+        response_policy_other = client.post("/api/v1/mcp/policies/", policy_data_other, format="json")
+        self.assertEqual(response_policy_other.status_code, 400)
+        self.assertIn("You are not a member of this workspace.", str(response_policy_other.data))
+
 
 
 
