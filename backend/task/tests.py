@@ -3681,6 +3681,104 @@ class InstitutionalIntelligenceTestCase(TestCase):
         )
         self.assertEqual(effect_wildcard, "REQUIRES_APPROVAL")
 
+    def test_routing_and_owner_authorization_regression(self):
+        from rest_framework.test import APIClient
+        from django.contrib.auth.models import User
+        from workspace.models import Workspace, WorkspaceMembership
+        from task.models import InstitutionalPolicy
+
+        # Setup workspace owner (no membership row)
+        owner_user = User.objects.create_user(username="owner_user_reg", password="password")
+        owner_workspace = Workspace.objects.create(name="Owner WS", owner=owner_user)
+
+        # Setup workspace member
+        member_user = User.objects.create_user(username="member_user_reg", password="password")
+        WorkspaceMembership.objects.create(workspace=owner_workspace, user=member_user, role="MEMBER")
+
+        # Setup unauthorized user
+        unauth_user = User.objects.create_user(username="unauth_user_reg", password="password")
+
+        client = APIClient()
+
+        # --- A. Workspace Owner without WorkspaceMembership ---
+        client.force_authenticate(user=owner_user)
+
+        # 1. GET policies -> returns 200
+        response = client.get(f"/api/v1/mcp/policies/?workspace_id={owner_workspace.id}")
+        self.assertEqual(response.status_code, 200)
+
+        # 2. POST create policy -> returns 201
+        policy_data = {
+            "name": "Owner Created Policy",
+            "effect": "ALLOW",
+            "priority": 5,
+            "rules": {"target_resource": "*"},
+            "workspace": str(owner_workspace.id)
+        }
+        response = client.post("/api/v1/mcp/policies/", policy_data, format="json")
+        self.assertEqual(response.status_code, 201)
+
+        # 3. GET policies again should return the created policy
+        response = client.get(f"/api/v1/mcp/policies/?workspace_id={owner_workspace.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["name"], "Owner Created Policy")
+
+        # 4. GET workflows (all four) -> returns 200
+        for wf_type in ["certificates", "maintenance", "laboratory", "grievances"]:
+            response = client.get(f"/api/v1/workflows/{wf_type}/?workspace_id={owner_workspace.id}")
+            self.assertEqual(response.status_code, 200)
+
+        # --- B. Workspace Member with WorkspaceMembership ---
+        client.force_authenticate(user=member_user)
+
+        # 1. GET policies -> returns 200 and can see policies
+        response = client.get(f"/api/v1/mcp/policies/?workspace_id={owner_workspace.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+
+        # 2. GET workflows -> returns 200
+        for wf_type in ["certificates", "maintenance", "laboratory", "grievances"]:
+            response = client.get(f"/api/v1/workflows/{wf_type}/?workspace_id={owner_workspace.id}")
+            self.assertEqual(response.status_code, 200)
+
+        # 3. POST create policy as member -> returns 201
+        policy_data_member = {
+            "name": "Member Created Policy",
+            "effect": "ALLOW",
+            "priority": 5,
+            "rules": {"target_resource": "*"},
+            "workspace": str(owner_workspace.id)
+        }
+        response = client.post("/api/v1/mcp/policies/", policy_data_member, format="json")
+        self.assertEqual(response.status_code, 201)
+
+        # --- C. Unauthorized User (neither owner nor member) ---
+        client.force_authenticate(user=unauth_user)
+
+        # 1. GET policies -> returns empty list
+        response = client.get(f"/api/v1/mcp/policies/?workspace_id={owner_workspace.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 0)
+
+        # 2. POST create policy -> returns 400 Bad Request
+        policy_data_unauth = {
+            "name": "Unauthorized Policy",
+            "effect": "ALLOW",
+            "priority": 5,
+            "rules": {"target_resource": "*"},
+            "workspace": str(owner_workspace.id)
+        }
+        response = client.post("/api/v1/mcp/policies/", policy_data_unauth, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("You are not a member of this workspace.", str(response.data))
+
+        # 3. GET workflows -> returns empty list
+        for wf_type in ["certificates", "maintenance", "laboratory", "grievances"]:
+            response = client.get(f"/api/v1/workflows/{wf_type}/?workspace_id={owner_workspace.id}")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(response.data), 0)
+
 
 
 

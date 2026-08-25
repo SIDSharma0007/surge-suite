@@ -168,27 +168,27 @@ export const workspaceServices = {
 
   // Institutional Policy Engine
   listPolicies(workspaceId) {
-    return api.get(`/tasks/mcp/policies/?workspace_id=${workspaceId}`);
+    return api.get(`/mcp/policies/?workspace_id=${workspaceId}`);
   },
   createPolicy(data) {
-    return api.post('/tasks/mcp/policies/', data);
+    return api.post('/mcp/policies/', data);
   },
   deletePolicy(id) {
-    return api.delete(`/tasks/mcp/policies/${id}/`);
+    return api.delete(`/mcp/policies/${id}/`);
   },
 
   // Workflow Logs
   listCertificateRequests(workspaceId) {
-    return api.get(`/tasks/workflows/certificates/?workspace_id=${workspaceId}`);
+    return api.get(`/workflows/certificates/?workspace_id=${workspaceId}`);
   },
   listMaintenanceTickets(workspaceId) {
-    return api.get(`/tasks/workflows/maintenance/?workspace_id=${workspaceId}`);
+    return api.get(`/workflows/maintenance/?workspace_id=${workspaceId}`);
   },
   listLabBookings(workspaceId) {
-    return api.get(`/tasks/workflows/laboratory/?workspace_id=${workspaceId}`);
+    return api.get(`/workflows/laboratory/?workspace_id=${workspaceId}`);
   },
   listGrievances(workspaceId) {
-    return api.get(`/tasks/workflows/grievances/?workspace_id=${workspaceId}`);
+    return api.get(`/workflows/grievances/?workspace_id=${workspaceId}`);
   }
 };
 
