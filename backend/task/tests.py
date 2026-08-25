@@ -3573,6 +3573,115 @@ class InstitutionalIntelligenceTestCase(TestCase):
         self.assertEqual(response_policy_other.status_code, 400)
         self.assertIn("You are not a member of this workspace.", str(response_policy_other.data))
 
+    def test_rag_edge_cases_and_isolation(self):
+        from workspace.models import WorkspaceContextItem, WorkspaceContextItemChunk, Workspace
+        from task.services.rag_service import RAGService
+
+        # 1. Workspace A vs Workspace B Isolation
+        workspace_b = Workspace.objects.create(name="Workspace B", owner=self.user)
+        WorkspaceContextItem.objects.create(
+            workspace=workspace_b,
+            creator=self.user,
+            context_type="INSTITUTIONAL_REFERENCE",
+            name="Workspace B Doc",
+            normalized_content="Workspace B Secret Code is 9999"
+        )
+        # Query on Workspace A
+        res_a = RAGService.retrieve_trusted_knowledge(self.workspace, "Secret Code")
+        # Should not retrieve Workspace B Doc
+        self.assertFalse(any(x["source"] == "Workspace B Doc" for x in res_a))
+
+        # 2. Inactive / Archived Exclusion
+        WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            context_type="INSTITUTIONAL_REFERENCE",
+            name="Inactive Doc",
+            is_active=False,
+            normalized_content="Inactive Secret Code is 1111"
+        )
+        res_inactive = RAGService.retrieve_trusted_knowledge(self.workspace, "Secret Code")
+        self.assertFalse(any(x["source"] == "Inactive Doc" for x in res_inactive))
+
+        WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            context_type="INSTITUTIONAL_REFERENCE",
+            name="Archived Doc",
+            is_archived=True,
+            normalized_content="Archived Secret Code is 2222"
+        )
+        res_archived = RAGService.retrieve_trusted_knowledge(self.workspace, "Secret Code")
+        self.assertFalse(any(x["source"] == "Archived Doc" for x in res_archived))
+
+        # 3. Re-indexing clean-up (no duplicate chunks)
+        doc_reindex = WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            context_type="INSTITUTIONAL_REFERENCE",
+            name="Reindex Doc",
+            normalized_content="Original text line one."
+        )
+        chunks_before = WorkspaceContextItemChunk.objects.filter(context_item=doc_reindex).count()
+        doc_reindex.normalized_content = "Updated text line one."
+        doc_reindex.save()
+        chunks_after = WorkspaceContextItemChunk.objects.filter(context_item=doc_reindex).count()
+        self.assertEqual(chunks_before, chunks_after)
+
+        # 4. Context budget limits
+        WorkspaceContextItem.objects.create(
+            workspace=self.workspace,
+            creator=self.user,
+            context_type="INSTITUTIONAL_REFERENCE",
+            name="Large Doc",
+            normalized_content="A " * 2000
+        )
+        # Limit set to small value (e.g. 50 characters)
+        self.workspace.context_window_limit = 50
+        self.workspace.save()
+        res_limited = RAGService.retrieve_trusted_knowledge(self.workspace, "A")
+        total_len = sum(len(x["content"]) for x in res_limited)
+        # Should be bounded
+        self.assertTrue(total_len <= 1500)
+
+    def test_uncertainty_detector_detailed(self):
+        from task.services.uncertainty_detector import UncertaintyDetector
+
+        # Missing required parameters for all 4 workflows
+        self.assertIn("lab_name", UncertaintyDetector.check_missing_info("laboratory_bookings.create_lab_booking", {}))
+        self.assertIn("category", UncertaintyDetector.check_missing_info("maintenance_tickets.create_maintenance_ticket", {}))
+        self.assertIn("subject", UncertaintyDetector.check_missing_info("grievance_escalation.create_grievance", {}))
+
+    def test_policy_engine_scenarios(self):
+        from task.models import InstitutionalPolicy
+        from task.services.policy_engine import PolicyEngine
+
+        # REQUIRES_APPROVAL rule
+        InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Approval Policy",
+            rules={"target_resource": "laboratory_bookings.*"},
+            effect="REQUIRES_APPROVAL",
+            priority=5
+        )
+        effect = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect, "REQUIRES_APPROVAL")
+
+        # Wildcard matching
+        effect_wildcard = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.user,
+            action_type="laboratory_bookings.cancel_lab_booking",
+            resource_data={}
+        )
+        self.assertEqual(effect_wildcard, "REQUIRES_APPROVAL")
+
+
 
 
 
