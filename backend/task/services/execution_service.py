@@ -598,14 +598,34 @@ class ExecutionService:
             "Do NOT wrap your final response in a tool call JSON object."
         )
 
+        # Enhance system instruction with workspace instructions (system prompt & skills)
+        from workspace.services.context_service import ContextService
+        target_user = user or task.creator
+        try:
+            workspace_instructions = ContextService.get_workspace_instructions(workspace.id, target_user.id)
+            if workspace_instructions.get("formatted_instruction_block"):
+                system_instruction += "\n\n" + workspace_instructions["formatted_instruction_block"]
+        except Exception:
+            pass
+
         # Enhance system instruction with Indic / multilingual directives (Hindi, Bengali, Odia, English)
         from .multilingual_prompt import enhance_system_instruction
         system_instruction = enhance_system_instruction(system_instruction, task.problem_statement)
 
-        prompt_with_history = (
-            f"AVAILABLE TOOLS:\n{capabilities_text}\n\n"
-            f"Task: {task.problem_statement}\n\n"
-        )
+        # Retrieve workspace-level context data (safely framed as DATA ONLY)
+        try:
+            workspace_context = ContextService.get_context(workspace.id, target_user.id, task_id=task.id)
+            context_block = workspace_context.get("formatted_prompt_block", "")
+        except Exception:
+            context_block = ""
+
+        prompt_elements = []
+        if context_block:
+            prompt_elements.append(context_block)
+        prompt_elements.append(f"AVAILABLE TOOLS:\n{capabilities_text}")
+        prompt_elements.append(f"Task: {task.problem_statement}")
+
+        prompt_with_history = "\n\n".join(prompt_elements) + "\n\n"
 
         step = 0
         max_steps = 5

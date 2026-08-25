@@ -56,7 +56,9 @@ backend/authentication/services/registered_faces.json
 !docs/**/*.md
 !README.md
 
-# Credentials and Certificates
+# Media and uploaded files
+backend/media/
+media/
 *.pem
 *.key
 *.p12
