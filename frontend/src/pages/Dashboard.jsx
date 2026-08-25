@@ -190,6 +190,13 @@ export default function Dashboard() {
     }
   }, [activeWorkspaceId, activeTab]);
 
+  // Fetch details immediately when selectedTaskId changes
+  useEffect(() => {
+    if (selectedTaskId) {
+      refreshTaskDetails(selectedTaskId);
+    }
+  }, [selectedTaskId]);
+
   // Periodic polling for task status if currently selected task is RUNNING, PENDING, or WAITING_FOR_APPROVAL
   useEffect(() => {
     if (!selectedTaskId || activeTab !== 'Tasks') return;
@@ -874,7 +881,7 @@ export default function Dashboard() {
                   };
 
                   return (
-                    <div style={styles.tasksContainer}>
+                    <div className="tasks-container-redesign">
                       {/* Left Column: Create Task & Task List */}
                       <div style={styles.tasksLeftCol}>
                         {/* Active Workspace AI Config Banner */}
@@ -1024,8 +1031,9 @@ export default function Dashboard() {
                         </section>
                       </div>
 
-                      {/* Right Column: Task Detail View */}
-                      <div style={styles.tasksRightCol}>
+                      {/* Right Column: Task Detail View & Approval Section wrapper */}
+                      <div className="tasks-right-side-wrapper">
+                        <div className="tasks-right-col-redesign">
                         {selectedTaskId ? (
                           (() => {
                             const selectedTask = tasks.find(t => t.id === selectedTaskId);
@@ -1106,131 +1114,7 @@ export default function Dashboard() {
                                   </div>
                                 </div>
 
-                                {/* Phase 4.7: Human Approval Panel */}
-                                {selectedTask.status === 'WAITING_FOR_APPROVAL' && selectedTask.pending_approval && (() => {
-                                  const ap = selectedTask.pending_approval;
-                                  return (
-                                    <div style={{
-                                      marginTop: '20px',
-                                      background: 'rgba(249, 115, 22, 0.06)',
-                                      border: '1.5px solid rgba(249, 115, 22, 0.45)',
-                                      borderRadius: 'var(--radius-md)',
-                                      overflow: 'hidden'
-                                    }}>
-                                      <div style={{
-                                        padding: '14px 16px',
-                                        borderBottom: '1px solid rgba(249, 115, 22, 0.25)',
-                                        background: 'rgba(249, 115, 22, 0.1)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '10px'
-                                      }}>
-                                        <span style={{ fontSize: '18px' }}>🔐</span>
-                                        <div>
-                                          <div style={{ fontWeight: '700', fontSize: '13px', color: '#f97316' }}>Shell Command Requires Your Approval</div>
-                                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>The agent is paused. Clicking Allow Once executes only this exact command.</div>
-                                        </div>
-                                      </div>
-                                      <div style={{ padding: '14px 16px' }}>
-                                        <div style={{ marginBottom: '10px' }}>
-                                          <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Requested Command</div>
-                                          <code style={{
-                                            display: 'block',
-                                            padding: '10px 12px',
-                                            background: 'var(--bg-input, rgba(0,0,0,0.15))',
-                                            borderRadius: '6px',
-                                            fontSize: '12px',
-                                            fontFamily: 'monospace',
-                                            color: '#f97316',
-                                            wordBreak: 'break-all',
-                                            border: '1px solid rgba(249, 115, 22, 0.2)'
-                                          }}>{ap.sanitized_display_command}</code>
-                                        </div>
-                                        {ap.reason && (
-                                          <div style={{ marginBottom: '10px' }}>
-                                            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agent Reasoning</div>
-                                            <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>{ap.reason}</p>
-                                          </div>
-                                        )}
-                                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
-                                          <div>
-                                            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Risk: </span>
-                                            <span style={{
-                                              padding: '2px 8px',
-                                              borderRadius: '100px',
-                                              fontSize: '11px',
-                                              fontWeight: '600',
-                                              background: ap.risk === 'HIGH' ? 'rgba(239,68,68,0.12)' : ap.risk === 'MEDIUM' ? 'rgba(249,115,22,0.12)' : 'rgba(234,179,8,0.12)',
-                                              color: ap.risk === 'HIGH' ? '#ef4444' : ap.risk === 'MEDIUM' ? '#f97316' : '#eab308',
-                                              border: `1px solid ${ap.risk === 'HIGH' ? 'rgba(239,68,68,0.3)' : ap.risk === 'MEDIUM' ? 'rgba(249,115,22,0.3)' : 'rgba(234,179,8,0.3)'}`
-                                            }}>{ap.risk}</span>
-                                          </div>
-                                          {ap.expires_at && (
-                                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                                              Expires: {new Date(ap.expires_at).toLocaleString()}
-                                            </div>
-                                          )}
-                                        </div>
-                                        <div style={{ padding: '8px 10px', background: 'rgba(249,115,22,0.06)', borderRadius: '6px', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '14px', border: '1px dashed rgba(249,115,22,0.3)' }}>
-                                          ⚠️ <strong>Allow Once</strong> grants permission for this exact command only. It does not permanently whitelist this command or grant broader shell access.
-                                        </div>
-                                        {approvalError && (
-                                          <div style={{ marginBottom: '10px', padding: '8px 10px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', fontSize: '12px', color: '#ef4444' }}>
-                                            {approvalError}
-                                          </div>
-                                        )}
-                                        <div style={{ display: 'flex', gap: '10px' }}>
-                                          <button
-                                            id={`approve-btn-${ap.id}`}
-                                            onClick={() => handleApproveCommand(selectedTask.id, ap.id)}
-                                            disabled={approvalLoading}
-                                            style={{
-                                              flex: 1,
-                                              padding: '10px',
-                                              background: approvalLoading ? 'rgba(34,197,94,0.1)' : 'rgba(34, 197, 94, 0.15)',
-                                              border: '1.5px solid rgba(34, 197, 94, 0.4)',
-                                              borderRadius: '8px',
-                                              color: '#22c55e',
-                                              fontWeight: '700',
-                                              fontSize: '13px',
-                                              cursor: approvalLoading ? 'not-allowed' : 'pointer',
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              justifyContent: 'center',
-                                              gap: '6px',
-                                              opacity: approvalLoading ? 0.6 : 1
-                                            }}
-                                          >
-                                            {approvalLoading ? '⏳ Processing...' : '✅ Allow Once'}
-                                          </button>
-                                          <button
-                                            id={`deny-btn-${ap.id}`}
-                                            onClick={() => handleDenyCommand(selectedTask.id, ap.id)}
-                                            disabled={approvalLoading}
-                                            style={{
-                                              flex: 1,
-                                              padding: '10px',
-                                              background: approvalLoading ? 'rgba(239,68,68,0.05)' : 'rgba(239, 68, 68, 0.1)',
-                                              border: '1.5px solid rgba(239, 68, 68, 0.35)',
-                                              borderRadius: '8px',
-                                              color: '#ef4444',
-                                              fontWeight: '700',
-                                              fontSize: '13px',
-                                              cursor: approvalLoading ? 'not-allowed' : 'pointer',
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              justifyContent: 'center',
-                                              gap: '6px',
-                                              opacity: approvalLoading ? 0.6 : 1
-                                            }}
-                                          >
-                                            {approvalLoading ? '⏳ Processing...' : '❌ Deny'}
-                                          </button>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                })()}
+
 
                                 {/* Agent Result Section */}
                                 {selectedTask.status === 'COMPLETED' ? (
@@ -1509,7 +1393,135 @@ export default function Dashboard() {
                           </div>
                         )}
                       </div>
+
+                      {/* Right Column: Approval Panel */}
+                      {(() => {
+                        if (!selectedTaskId) return null;
+                        const selectedTask = tasks.find(t => t.id === selectedTaskId);
+                        if (!selectedTask || selectedTask.status !== 'WAITING_FOR_APPROVAL' || !selectedTask.pending_approval) return null;
+                        const ap = selectedTask.pending_approval;
+                        return (
+                          <div className="tasks-approval-panel-redesign">
+                            <h3 style={styles.detailTitle}>Approval Required</h3>
+                            
+                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: '1.4', marginTop: '-4px' }}>
+                              Agent execution is paused. This command requires your authorization before proceeding.
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <span style={{ fontSize: 'var(--text-xs)', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Requested Command
+                              </span>
+                              <code style={{
+                                display: 'block',
+                                padding: '12px',
+                                background: 'var(--bg-input, #1f1f23)',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: '13px',
+                                fontFamily: 'monospace',
+                                color: 'var(--text-primary)',
+                                wordBreak: 'break-all',
+                                border: '1px solid var(--border-medium)',
+                                lineHeight: '1.4'
+                              }}>{ap.sanitized_display_command}</code>
+                            </div>
+
+                            {ap.reason && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <span style={{ fontSize: 'var(--text-xs)', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                  Agent Reasoning
+                                </span>
+                                <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: '1.4' }}>{ap.reason}</p>
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div>
+                                <span style={{ fontSize: 'var(--text-xs)', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Risk Level: </span>
+                                <span style={{
+                                  padding: '2px 8px',
+                                  borderRadius: 'var(--radius-full)',
+                                  fontSize: '10px',
+                                  fontWeight: '700',
+                                  textTransform: 'uppercase',
+                                  background: ap.risk === 'HIGH' ? 'rgba(239, 68, 68, 0.1)' : ap.risk === 'MEDIUM' ? 'rgba(245, 158, 11, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                                  color: ap.risk === 'HIGH' ? 'var(--status-error, #ef4444)' : ap.risk === 'MEDIUM' ? 'var(--status-warning, #f59e0b)' : 'var(--status-success, #10b981)',
+                                  border: `1px solid ${ap.risk === 'HIGH' ? 'rgba(239, 68, 68, 0.2)' : ap.risk === 'MEDIUM' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)'}`
+                                }}>{ap.risk}</span>
+                              </div>
+                              {ap.expires_at && (
+                                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                                  Expires: {new Date(ap.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                              )}
+                            </div>
+
+                            <div style={{ padding: '10px 12px', background: 'rgba(245, 158, 11, 0.04)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--text-secondary)', border: '1px dashed rgba(245, 158, 11, 0.2)' }}>
+                              ⚠️ <strong>Allow Once</strong> executes only this exact command. It does not whitelist future actions.
+                            </div>
+
+                            {approvalError && (
+                              <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.06)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--status-error, #ef4444)' }}>
+                                {approvalError}
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', gap: '12px', marginTop: 'auto', paddingTop: '12px' }}>
+                              <button
+                                id={`modal-approve-btn-${ap.id}`}
+                                onClick={() => handleApproveCommand(selectedTask.id, ap.id)}
+                                disabled={approvalLoading}
+                                style={{
+                                  flex: 1,
+                                  padding: '8px 16px',
+                                  background: 'var(--status-success, #10b981)',
+                                  border: 'none',
+                                  borderRadius: 'var(--radius-sm)',
+                                  color: '#ffffff',
+                                  fontWeight: '600',
+                                  fontSize: 'var(--text-sm)',
+                                  cursor: approvalLoading ? 'not-allowed' : 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '8px',
+                                  opacity: approvalLoading ? 0.6 : 1,
+                                  boxShadow: '0 2px 4px rgba(16, 185, 129, 0.15)',
+                                  transition: 'var(--transition-all)'
+                                }}
+                              >
+                                {approvalLoading ? '⏳ Processing...' : 'Allow Once'}
+                              </button>
+                              <button
+                                id={`modal-deny-btn-${ap.id}`}
+                                onClick={() => handleDenyCommand(selectedTask.id, ap.id)}
+                                disabled={approvalLoading}
+                                style={{
+                                  flex: 1,
+                                  padding: '8px 16px',
+                                  background: 'rgba(239, 68, 68, 0.08)',
+                                  border: '1px solid var(--status-error, #ef4444)',
+                                  borderRadius: 'var(--radius-sm)',
+                                  color: 'var(--status-error, #ef4444)',
+                                  fontWeight: '600',
+                                  fontSize: 'var(--text-sm)',
+                                  cursor: approvalLoading ? 'not-allowed' : 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '8px',
+                                  opacity: approvalLoading ? 0.6 : 1,
+                                  transition: 'var(--transition-all)'
+                                }}
+                              >
+                                {approvalLoading ? '⏳ Processing...' : 'Deny'}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
+                  </div>
                   );
                 })()
               )}

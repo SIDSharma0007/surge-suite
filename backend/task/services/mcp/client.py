@@ -6,9 +6,10 @@ import time
 import sys
 
 class MCPClient:
-    def __init__(self, name: str, command: list):
+    def __init__(self, name: str, command: list, env: dict = None):
         self.name = name
         self.command = command
+        self.env = env
         self.process = None
         self.response_queues = {}
         self.next_id = 1
@@ -17,12 +18,19 @@ class MCPClient:
         self.stderr_thread = None
 
     def start(self):
+        import os
+        proc_env = os.environ.copy()
+        if self.env:
+            # Filter out None values and ensure everything is string
+            string_env = {str(k): str(v) for k, v in self.env.items() if v is not None}
+            proc_env.update(string_env)
         try:
             self.process = subprocess.Popen(
                 self.command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=proc_env,
                 text=True,
                 bufsize=1
             )

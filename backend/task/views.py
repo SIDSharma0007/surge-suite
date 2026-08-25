@@ -3,10 +3,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 
+from rest_framework.views import APIView
 from workspace.models import Workspace
 from workspace.permissions import IsAuthenticatedOr401
-from .models import Task, Agent, TaskExecution
-from .serializers import TaskSerializer, AgentSerializer, TaskExecutionSerializer
+from .models import Task, Agent, TaskExecution, UserMCPServer
+from .serializers import TaskSerializer, AgentSerializer, TaskExecutionSerializer, UserMCPServerSerializer
 from .permissions import IsWorkspaceMemberForTask
 from .services.task_service import TaskService
 from .services.execution_service import ExecutionService
@@ -341,3 +342,34 @@ class ProviderSettingsDetailView(APIView):
             "configured": False,
             "masked_key": None
         }, status=status.HTTP_200_OK)
+
+
+class BuiltinMCPServerListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from .services.mcp.config import MCP_SERVER_CONFIGS
+        data = []
+        for cfg in MCP_SERVER_CONFIGS:
+            data.append({
+                "name": cfg["name"],
+                "description": f"Built-in {cfg['name']} MCP server.",
+                "configuration": {
+                    "command": cfg["command"],
+                    "env": {}
+                },
+                "tools": cfg.get("tools", [])
+            })
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class UserMCPServerViewSet(viewsets.ModelViewSet):
+    serializer_class = UserMCPServerSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return UserMCPServer.objects.filter(user=self.request.user).order_by('name')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
