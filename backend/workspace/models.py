@@ -28,9 +28,19 @@ class Workspace(models.Model):
         return self.name
 
 class WorkspaceMembership(models.Model):
+    ROLE_ADMIN = 'ADMIN'
+    ROLE_MEMBER = 'MEMBER'
+    ROLE_VIEWER = 'VIEWER'
+
+    ROLE_CHOICES = [
+        (ROLE_ADMIN, 'Admin'),
+        (ROLE_MEMBER, 'Member'),
+        (ROLE_VIEWER, 'Viewer'),
+    ]
+
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='memberships')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='workspace_memberships')
-    role = models.CharField(max_length=50, default='MEMBER', choices=[('MEMBER', 'Member')])
+    role = models.CharField(max_length=50, default=ROLE_MEMBER, choices=ROLE_CHOICES)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

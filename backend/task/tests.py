@@ -3691,9 +3691,9 @@ class InstitutionalIntelligenceTestCase(TestCase):
         owner_user = User.objects.create_user(username="owner_user_reg", password="password")
         owner_workspace = Workspace.objects.create(name="Owner WS", owner=owner_user)
 
-        # Setup workspace member
+        # Setup workspace admin
         member_user = User.objects.create_user(username="member_user_reg", password="password")
-        WorkspaceMembership.objects.create(workspace=owner_workspace, user=member_user, role="MEMBER")
+        WorkspaceMembership.objects.create(workspace=owner_workspace, user=member_user, role="ADMIN")
 
         # Setup unauthorized user
         unauth_user = User.objects.create_user(username="unauth_user_reg", password="password")
@@ -3981,6 +3981,305 @@ class InstitutionalIntelligenceTestCase(TestCase):
 
         # Cleanup
         InstitutionalPolicy.objects.all().delete()
+
+
+class MCPRoleBasedAccessControlTestCase(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="owner_user", password="password")
+        self.admin = User.objects.create_user(username="admin_user", password="password")
+        self.member = User.objects.create_user(username="member_user", password="password")
+        self.viewer = User.objects.create_user(username="viewer_user", password="password")
+
+        self.workspace = Workspace.objects.create(
+            name="Secure RBAC Workspace",
+            owner=self.owner,
+            workflow_execution_enabled=True,
+            policy_engine_enabled=True
+        )
+
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.admin, role='ADMIN')
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role='MEMBER')
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.viewer, role='VIEWER')
+
+    def test_viewer_blocked_from_mutating_tools(self):
+        from task.services.mcp.registry import MCPRegistry
+        registry = MCPRegistry(user=self.viewer, workspace=self.workspace)
+        mock_client = MagicMock()
+        registry.tools["certificate_requests.create_certificate_request"] = (
+            mock_client,
+            {"original_name": "create_certificate_request", "type": "mcp"}
+        )
+
+        res = registry.execute_tool(
+            "certificate_requests.create_certificate_request",
+            {"certificate_type": "Transfer Certificate", "reason": "Relocation"}
+        )
+        self.assertIn("Permission Denied", res.get("error", ""))
+        self.assertIn("VIEWER", res.get("error", ""))
+        mock_client.send_request.assert_not_called()
+
+    def test_member_blocked_from_admin_closing_ticket(self):
+        from task.services.mcp.registry import MCPRegistry
+        registry = MCPRegistry(user=self.member, workspace=self.workspace)
+        mock_client = MagicMock()
+        registry.tools["maintenance_tickets.close_maintenance_ticket"] = (
+            mock_client,
+            {"original_name": "close_maintenance_ticket", "type": "mcp"}
+        )
+
+        res = registry.execute_tool(
+            "maintenance_tickets.close_maintenance_ticket",
+            {"ticket_id": "1", "reason": "Fixed by member"}
+        )
+        self.assertIn("Permission Denied", res.get("error", ""))
+        self.assertIn("ADMIN", res.get("error", ""))
+        mock_client.send_request.assert_not_called()
+
+    def test_member_blocked_from_escalating_grievance(self):
+        from task.services.mcp.registry import MCPRegistry
+        registry = MCPRegistry(user=self.member, workspace=self.workspace)
+        mock_client = MagicMock()
+        registry.tools["grievance_escalation.escalate_grievance"] = (
+            mock_client,
+            {"original_name": "escalate_grievance", "type": "mcp"}
+        )
+
+        res = registry.execute_tool(
+            "grievance_escalation.escalate_grievance",
+            {"grievance_id": "1", "reason": "Urgent"}
+        )
+        self.assertIn("Permission Denied", res.get("error", ""))
+        mock_client.send_request.assert_not_called()
+
+    def test_admin_allowed_to_close_ticket(self):
+        from task.services.mcp.registry import MCPRegistry
+        registry = MCPRegistry(user=self.admin, workspace=self.workspace)
+        mock_client = MagicMock()
+        mock_client.send_request.return_value = {
+            "result": {
+                "content": [{"type": "text", "text": "Successfully closed maintenance ticket 1."}]
+            }
+        }
+        registry.tools["maintenance_tickets.close_maintenance_ticket"] = (
+            mock_client,
+            {"original_name": "close_maintenance_ticket", "type": "mcp"}
+        )
+
+        res = registry.execute_tool(
+            "maintenance_tickets.close_maintenance_ticket",
+            {"ticket_id": "1", "reason": "Resolved by facility admin"}
+        )
+        self.assertNotIn("Permission Denied", res.get("error", ""))
+        self.assertIn("Successfully closed", res.get("result", ""))
+        mock_client.send_request.assert_called_once()
+
+    def test_viewer_allowed_read_only_tools(self):
+        from task.services.mcp.registry import MCPRegistry
+        registry = MCPRegistry(user=self.viewer, workspace=self.workspace)
+        mock_client = MagicMock()
+        mock_client.send_request.return_value = {
+            "result": {
+                "content": [{"type": "text", "text": "Your maintenance tickets:\n- 1: Electrical"}]
+            }
+        }
+        registry.tools["maintenance_tickets.list_maintenance_tickets"] = (
+            mock_client,
+            {"original_name": "list_maintenance_tickets", "type": "mcp"}
+        )
+
+        res = registry.execute_tool("maintenance_tickets.list_maintenance_tickets", {})
+        self.assertNotIn("error", res)
+        self.assertIn("Your maintenance tickets", res.get("result", ""))
+
+    def test_capability_registry_blocks_member_and_viewer_database_queries(self):
+        from task.services.capability_registry import CapabilityRegistry
+
+        reg_member = CapabilityRegistry(user=self.member, workspace=self.workspace)
+        res_member = reg_member.execute_tool("builtin.database.query", {"sql": "SELECT 1;"})
+        self.assertIn("error", res_member)
+        self.assertIn("Permission Denied", res_member["error"])
+
+        reg_viewer = CapabilityRegistry(user=self.viewer, workspace=self.workspace)
+        res_viewer = reg_viewer.execute_tool("builtin.database.query", {"sql": "SELECT 1;"})
+        self.assertIn("error", res_viewer)
+        self.assertIn("Permission Denied", res_viewer["error"])
+
+    def test_capability_registry_blocks_member_and_viewer_bash(self):
+        from task.services.capability_registry import CapabilityRegistry
+
+        reg_member = CapabilityRegistry(user=self.member, workspace=self.workspace)
+        res_member = reg_member.execute_tool("bash.execute", {"command": "echo test"})
+        self.assertIn("error", res_member)
+        self.assertIn("Permission Denied", res_member["error"])
+
+    def test_capability_registry_allows_admin_and_owner(self):
+        from task.services.capability_registry import CapabilityRegistry
+
+        reg_admin = CapabilityRegistry(user=self.admin, workspace=self.workspace)
+        res = reg_admin.execute_tool("builtin.database.query", {"sql": "SELECT 1;"})
+        self.assertNotIn("error", res)
+        self.assertEqual(res["row_count"], 1)
+
+        reg_owner = CapabilityRegistry(user=self.owner, workspace=self.workspace)
+        res_owner = reg_owner.execute_tool("builtin.database.query", {"sql": "SELECT 1;"})
+        self.assertNotIn("error", res_owner)
+
+    def test_policy_engine_role_constraints(self):
+        from task.services.policy_engine import PolicyEngine
+        from task.models import InstitutionalPolicy
+        # Policy that denies laboratory to members and viewers
+        InstitutionalPolicy.objects.create(
+            workspace=self.workspace,
+            name="Block lab for non-admins",
+            rules={"target_resource": "laboratory", "roles": ["MEMBER", "VIEWER"]},
+            effect="DENY",
+            priority=20
+        )
+
+        effect_member = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.member,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={"lab_name": "Chemistry Lab"}
+        )
+        self.assertEqual(effect_member, "DENY")
+
+        effect_admin = PolicyEngine.evaluate(
+            workspace=self.workspace,
+            user=self.admin,
+            action_type="laboratory_bookings.create_lab_booking",
+            resource_data={"lab_name": "Chemistry Lab"}
+        )
+        self.assertEqual(effect_admin, "ALLOW")
+
+
+class TaskRoleBasedAccessControlTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.owner = User.objects.create_user(username="owner_user", password="password")
+        self.admin = User.objects.create_user(username="admin_user", password="password")
+        self.member = User.objects.create_user(username="member_user", password="password")
+        self.other_member = User.objects.create_user(username="other_member_user", password="password")
+        self.viewer = User.objects.create_user(username="viewer_user", password="password")
+
+        self.workspace = Workspace.objects.create(name="Task RBAC Workspace", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.admin, role="ADMIN")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role="MEMBER")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.other_member, role="MEMBER")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.viewer, role="VIEWER")
+
+    def test_task_create_and_execute_rbac(self):
+        # 1. Member can create task
+        self.client.force_authenticate(user=self.member)
+        res_mem = self.client.post('/api/v1/tasks/', {
+            "workspace": str(self.workspace.id),
+            "problem_statement": "Member task"
+        })
+        self.assertEqual(res_mem.status_code, 201)
+        task_id = res_mem.data["id"]
+
+        # 2. Viewer cannot create task (403)
+        self.client.force_authenticate(user=self.viewer)
+        res_view = self.client.post('/api/v1/tasks/', {
+            "workspace": str(self.workspace.id),
+            "problem_statement": "Viewer task"
+        })
+        self.assertEqual(res_view.status_code, 403)
+
+        # 3. Viewer cannot execute task (403)
+        res_exec_view = self.client.post(f'/api/v1/tasks/{task_id}/execute/')
+        self.assertEqual(res_exec_view.status_code, 403)
+
+    def test_command_approval_rbac(self):
+        # Create a task owned by self.member
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.member,
+            problem_statement="Approve test task",
+            status="WAITING_FOR_APPROVAL"
+        )
+        approval_id = "00000000-0000-0000-0000-000000000001"
+
+        # 1. Unrelated member is blocked (403)
+        self.client.force_authenticate(user=self.other_member)
+        res_other = self.client.post(f'/api/v1/tasks/{task.id}/approvals/{approval_id}/approve/')
+        self.assertEqual(res_other.status_code, 403)
+
+        # 2. Viewer is blocked (403)
+        self.client.force_authenticate(user=self.viewer)
+        res_view = self.client.post(f'/api/v1/tasks/{task.id}/approvals/{approval_id}/approve/')
+        self.assertEqual(res_view.status_code, 403)
+
+    def test_institutional_policy_rbac(self):
+        # 1. Member cannot create institutional policy (403)
+        self.client.force_authenticate(user=self.member)
+        res_create_mem = self.client.post('/api/v1/mcp/policies/', {
+            "workspace": str(self.workspace.id),
+            "name": "Member Policy",
+            "effect": "ALLOW",
+            "priority": 1,
+            "rules": {"target_resource": "*"}
+        }, format='json')
+        self.assertEqual(res_create_mem.status_code, 403)
+
+        # 2. Admin can create institutional policy (201)
+        self.client.force_authenticate(user=self.admin)
+        res_create_admin = self.client.post('/api/v1/mcp/policies/', {
+            "workspace": str(self.workspace.id),
+            "name": "Admin Policy",
+            "effect": "ALLOW",
+            "priority": 1,
+            "rules": {"target_resource": "*"}
+        }, format='json')
+        self.assertEqual(res_create_admin.status_code, 201)
+        policy_id = res_create_admin.data["id"]
+
+        # 3. Member cannot modify policy (403)
+        self.client.force_authenticate(user=self.member)
+        res_patch_mem = self.client.patch(f'/api/v1/mcp/policies/{policy_id}/', {
+            "name": "Hacked Policy"
+        }, format='json')
+        self.assertEqual(res_patch_mem.status_code, 403)
+
+        # 4. Member cannot delete policy (403)
+        res_del_mem = self.client.delete(f'/api/v1/mcp/policies/{policy_id}/')
+        self.assertEqual(res_del_mem.status_code, 403)
+
+        # 5. Admin can delete policy (204)
+        self.client.force_authenticate(user=self.admin)
+        res_del_admin = self.client.delete(f'/api/v1/mcp/policies/{policy_id}/')
+        self.assertEqual(res_del_admin.status_code, 204)
+
+    def test_workflow_resources_isolation_and_admin_visibility(self):
+        from task.models import CertificateRequest
+        # Create 1 cert for member, 1 cert for other_member
+        cert_mem = CertificateRequest.objects.create(
+            workspace=self.workspace,
+            user=self.member,
+            certificate_type="BONAFIDE",
+            description="Passport"
+        )
+        cert_other = CertificateRequest.objects.create(
+            workspace=self.workspace,
+            user=self.other_member,
+            certificate_type="INTERNSHIP",
+            description="Job"
+        )
+
+        # Member only sees their own (count = 1)
+        self.client.force_authenticate(user=self.member)
+        res_mem = self.client.get(f'/api/v1/workflows/certificates/?workspace_id={self.workspace.id}')
+        self.assertEqual(res_mem.status_code, 200)
+        self.assertEqual(len(res_mem.data), 1)
+        self.assertEqual(res_mem.data[0]["id"], str(cert_mem.id))
+
+        # Admin sees all certificates in the workspace (count = 2)
+        self.client.force_authenticate(user=self.admin)
+        res_admin = self.client.get(f'/api/v1/workflows/certificates/?workspace_id={self.workspace.id}')
+        self.assertEqual(res_admin.status_code, 200)
+        self.assertEqual(len(res_admin.data), 2)
+
+
 
 
 

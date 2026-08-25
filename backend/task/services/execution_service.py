@@ -610,7 +610,7 @@ class ExecutionService:
             metadata=sanitize_data({'tools_discovered': [t['name'] for t in mcp_tools]}, resolved_key)
         )
 
-        builtin_registry = CapabilityRegistry()
+        builtin_registry = CapabilityRegistry(user=task.creator, workspace=task.workspace)
         builtin_capabilities = builtin_registry.discover_capabilities()
 
         # Map of all registered tools and their schemas for validation
@@ -1465,7 +1465,7 @@ class ExecutionService:
             except Exception:
                 mcp_tools = []
 
-        builtin_registry = CapabilityRegistry()
+        builtin_registry = CapabilityRegistry(user=task.creator, workspace=task.workspace)
         builtin_capabilities = builtin_registry.discover_capabilities()
 
         all_registered_tools = {}

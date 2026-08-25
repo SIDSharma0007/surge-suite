@@ -88,21 +88,113 @@ class WorkspaceTestCase(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
-    # --- MEMBERSHIP ---
+    # --- MEMBERSHIP & ACCESS CONTROL ---
+    def test_owner_can_list_members(self):
+        WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_b, role='MEMBER')
+        self.client.force_login(self.user_a)
+        response = self.client.get(reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}))
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['user']['username'], 'user_b')
+        self.assertEqual(data[0]['role'], 'MEMBER')
+
+    def test_member_can_list_members(self):
+        WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_b, role='MEMBER')
+        WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_c, role='VIEWER')
+        self.client.force_login(self.user_b)
+        response = self.client.get(reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}))
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(len(data), 2)
+
+    def test_unrelated_user_cannot_list_members(self):
+        WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_b, role='MEMBER')
+        self.client.force_login(self.user_c)
+        response = self.client.get(reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}))
+        self.assertEqual(response.status_code, 403)
+
     def test_owner_can_add_member(self):
         self.client.force_login(self.user_a)
         response = self.client.post(
-            reverse('workspace-add-member', kwargs={'pk': self.workspace_a1.id}),
+            reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}),
             {'user_id': self.user_b.id}
         )
         self.assertEqual(response.status_code, 201)
-        self.assertTrue(WorkspaceMembership.objects.filter(workspace=self.workspace_a1, user=self.user_b).exists())
+        data = json.loads(response.content)
+        self.assertEqual(data['role'], 'MEMBER')
+        self.assertTrue(WorkspaceMembership.objects.filter(workspace=self.workspace_a1, user=self.user_b, role='MEMBER').exists())
+
+    def test_owner_can_add_member_with_custom_role(self):
+        self.client.force_login(self.user_a)
+        response = self.client.post(
+            reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}),
+            {'user_id': self.user_b.id, 'role': 'ADMIN'},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 201)
+        data = json.loads(response.content)
+        self.assertEqual(data['role'], 'ADMIN')
+        self.assertTrue(WorkspaceMembership.objects.filter(workspace=self.workspace_a1, user=self.user_b, role='ADMIN').exists())
+
+    def test_owner_can_update_member_role(self):
+        membership = WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_b, role='MEMBER')
+        self.client.force_login(self.user_a)
+        response = self.client.patch(
+            reverse('workspace-member-detail', kwargs={'pk': self.workspace_a1.id, 'user_id': self.user_b.id}),
+            {'role': 'VIEWER'},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 200)
+        membership.refresh_from_db()
+        self.assertEqual(membership.role, 'VIEWER')
+
+    def test_member_cannot_update_member_role(self):
+        WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_b, role='MEMBER')
+        WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_c, role='MEMBER')
+        self.client.force_login(self.user_b)
+        response = self.client.patch(
+            reverse('workspace-member-detail', kwargs={'pk': self.workspace_a1.id, 'user_id': self.user_c.id}),
+            {'role': 'ADMIN'},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_unrelated_user_cannot_update_member_role(self):
+        WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_b, role='MEMBER')
+        self.client.force_login(self.user_c)
+        response = self.client.patch(
+            reverse('workspace-member-detail', kwargs={'pk': self.workspace_a1.id, 'user_id': self.user_b.id}),
+            {'role': 'ADMIN'},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_owner_cannot_modify_own_role(self):
+        self.client.force_login(self.user_a)
+        response = self.client.patch(
+            reverse('workspace-member-detail', kwargs={'pk': self.workspace_a1.id, 'user_id': self.user_a.id}),
+            {'role': 'VIEWER'},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("Cannot modify the role of the workspace owner", data['error'])
+
+    def test_owner_cannot_remove_self(self):
+        self.client.force_login(self.user_a)
+        response = self.client.delete(
+            reverse('workspace-member-detail', kwargs={'pk': self.workspace_a1.id, 'user_id': self.user_a.id})
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("Cannot remove the workspace owner", data['error'])
 
     def test_owner_can_remove_member(self):
         membership = WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_b, role='MEMBER')
         self.client.force_login(self.user_a)
         response = self.client.delete(
-            reverse('workspace-remove-member', kwargs={'pk': self.workspace_a1.id, 'user_id': self.user_b.id})
+            reverse('workspace-member-detail', kwargs={'pk': self.workspace_a1.id, 'user_id': self.user_b.id})
         )
         self.assertEqual(response.status_code, 200)
         self.assertFalse(WorkspaceMembership.objects.filter(workspace=self.workspace_a1, user=self.user_b).exists())
@@ -112,8 +204,13 @@ class WorkspaceTestCase(TestCase):
         self.client.force_login(self.user_b)
         # Try to add user_c
         response = self.client.post(
-            reverse('workspace-add-member', kwargs={'pk': self.workspace_a1.id}),
+            reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}),
             {'user_id': self.user_c.id}
+        )
+        self.assertEqual(response.status_code, 403)
+        # Try to remove user_c
+        response = self.client.delete(
+            reverse('workspace-member-detail', kwargs={'pk': self.workspace_a1.id, 'user_id': self.user_c.id})
         )
         self.assertEqual(response.status_code, 403)
 
@@ -121,8 +218,27 @@ class WorkspaceTestCase(TestCase):
         WorkspaceMembership.objects.create(workspace=self.workspace_a1, user=self.user_b, role='MEMBER')
         self.client.force_login(self.user_a)
         response = self.client.post(
-            reverse('workspace-add-member', kwargs={'pk': self.workspace_a1.id}),
+            reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}),
             {'user_id': self.user_b.id}
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_owner_cannot_be_added_as_member(self):
+        self.client.force_login(self.user_a)
+        response = self.client.post(
+            reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}),
+            {'user_id': self.user_a.id}
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn("owner cannot be added as a member", data['error'])
+
+    def test_invalid_role_rejected(self):
+        self.client.force_login(self.user_a)
+        response = self.client.post(
+            reverse('workspace-members', kwargs={'pk': self.workspace_a1.id}),
+            {'user_id': self.user_b.id, 'role': 'SUPERUSER'},
+            content_type='application/json'
         )
         self.assertEqual(response.status_code, 400)
 
@@ -499,7 +615,7 @@ class WorkspaceDMAgentTestCase(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.content)
-        self.assertEqual(data["error"], "Configure this provider under Settings → AI Providers.")
+        self.assertEqual(data["error"], "API key for 'gemini' is not configured. Please add it in Provider Settings.")
 
     def test_upstream_http_failure_returns_explicit_error_without_fallback(self):
         self.client.force_login(self.user_a)
@@ -1011,6 +1127,99 @@ class WorkspaceContextAPITests(TestCase):
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["mode"], "SIMULATED")
+
+
+class WorkspaceSettingsRBACPermissionTestCase(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="owner_user", password="password")
+        self.admin = User.objects.create_user(username="admin_user", password="password")
+        self.member = User.objects.create_user(username="member_user", password="password")
+        self.viewer = User.objects.create_user(username="viewer_user", password="password")
+
+        self.workspace = Workspace.objects.create(name="RBAC Workspace", owner=self.owner)
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.admin, role="ADMIN")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.member, role="MEMBER")
+        WorkspaceMembership.objects.create(workspace=self.workspace, user=self.viewer, role="VIEWER")
+
+    def test_settings_update_permissions(self):
+        url = reverse('workspace-settings', kwargs={'pk': self.workspace.id})
+
+        # 1. Owner can update settings
+        self.client.force_login(self.owner)
+        res_owner = self.client.patch(url, {"system_prompt": "Owner prompt"}, content_type="application/json")
+        self.assertEqual(res_owner.status_code, 200)
+
+        # 2. Admin can update settings
+        self.client.force_login(self.admin)
+        res_admin = self.client.patch(url, {"system_prompt": "Admin prompt"}, content_type="application/json")
+        self.assertEqual(res_admin.status_code, 200)
+
+        # 3. Member cannot update settings (403)
+        self.client.force_login(self.member)
+        res_member = self.client.patch(url, {"system_prompt": "Member prompt"}, content_type="application/json")
+        self.assertEqual(res_member.status_code, 403)
+
+        # 4. Viewer cannot update settings (403)
+        self.client.force_login(self.viewer)
+        res_viewer = self.client.patch(url, {"system_prompt": "Viewer prompt"}, content_type="application/json")
+        self.assertEqual(res_viewer.status_code, 403)
+
+    def test_skills_crud_rbac(self):
+        url = reverse('workspace-skills', kwargs={'pk': self.workspace.id})
+
+        # Member cannot add skills (403)
+        self.client.force_login(self.member)
+        res_mem = self.client.post(url, {"name": "test.md", "content": "Skill"}, content_type="application/json")
+        self.assertEqual(res_mem.status_code, 403)
+
+        # Viewer cannot add skills (403)
+        self.client.force_login(self.viewer)
+        res_view = self.client.post(url, {"name": "test.md", "content": "Skill"}, content_type="application/json")
+        self.assertEqual(res_view.status_code, 403)
+
+        # Admin can add skills
+        self.client.force_login(self.admin)
+        res_admin = self.client.post(url, {"name": "test.md", "content": "Skill"}, content_type="application/json")
+        self.assertEqual(res_admin.status_code, 201)
+        skill_id = res_admin.json()["id"]
+
+        # Member cannot delete skills (403)
+        del_url = reverse('workspace-remove-skill', kwargs={'pk': self.workspace.id, 'skill_id': skill_id})
+        self.client.force_login(self.member)
+        res_del_mem = self.client.delete(del_url)
+        self.assertEqual(res_del_mem.status_code, 403)
+
+        # Admin can delete skills (200)
+        self.client.force_login(self.admin)
+        res_del_admin = self.client.delete(del_url)
+        self.assertEqual(res_del_admin.status_code, 200)
+
+    def test_context_crud_rbac(self):
+        url = reverse('workspace-context', kwargs={'pk': self.workspace.id})
+
+        # Viewer cannot add context (403)
+        self.client.force_login(self.viewer)
+        res_view = self.client.post(url, {"name": "Viewer Context", "content": "data", "context_type": "USER_CONTEXT"}, content_type="application/json")
+        self.assertEqual(res_view.status_code, 403)
+
+        # Member can add context
+        self.client.force_login(self.member)
+        res_mem = self.client.post(url, {"name": "Member Context", "content": "data", "context_type": "USER_CONTEXT"}, content_type="application/json")
+        self.assertEqual(res_mem.status_code, 201)
+        context_id = res_mem.json()["id"]
+
+        # Viewer cannot delete context (403)
+        del_url = reverse('workspace-remove-context', kwargs={'pk': self.workspace.id, 'context_id': context_id})
+        self.client.force_login(self.viewer)
+        res_del_view = self.client.delete(del_url)
+        self.assertEqual(res_del_view.status_code, 403)
+
+        # Admin can delete context (200)
+        self.client.force_login(self.admin)
+        res_del_admin = self.client.delete(del_url)
+        self.assertEqual(res_del_admin.status_code, 200)
+
 
 
 

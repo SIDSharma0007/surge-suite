@@ -6,6 +6,7 @@ import Notes from './Notes.jsx';
 import SettingsTab from '../components/SettingsTab';
 import DMAgentTab from '../components/DMAgentTab';
 import WorkspaceSettingsModal from '../components/WorkspaceSettingsModal';
+import WorkspaceMembersModal from '../components/WorkspaceMembersModal';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import VoiceCommandButton from '../components/VoiceCommandButton';
 import AudioResponsePlayer from '../components/AudioResponsePlayer';
@@ -56,9 +57,6 @@ export default function Dashboard() {
   // Membership modal states
   const [membersModalOpen, setMembersModalOpen] = useState(false);
   const [membersWorkspace, setMembersWorkspace] = useState(null);
-  const [membersList, setMembersList] = useState([]);
-  const [allUsersList, setAllUsersList] = useState([]);
-  const [selectedUserToAdd, setSelectedUserToAdd] = useState('');
 
   // Workspace Settings & Context Modal states
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
@@ -94,6 +92,11 @@ export default function Dashboard() {
       setTaskProblemStatement(fullText);
     }
   });
+
+  const activeWs = workspaces.find(w => w.id === activeWorkspaceId);
+  const activeWsRole = activeWs?.role || 'MEMBER';
+  const isViewerRole = activeWsRole === 'VIEWER';
+  const isOwnerOrAdmin = activeWsRole === 'OWNER' || activeWsRole === 'ADMIN';
 
   const loadTasks = async (wsId) => {
     if (!wsId) return;
@@ -357,45 +360,10 @@ export default function Dashboard() {
     }
   };
 
-  const handleOpenMembers = async (ws) => {
-    try {
-      setWorkspaceError(null);
-      setMembersWorkspace(ws);
-      const membersRes = await workspaceServices.listMembers(ws.id);
-      setMembersList(membersRes.data);
-      const usersRes = await workspaceServices.listAllUsers();
-      setAllUsersList(usersRes.data);
-      setMembersModalOpen(true);
-    } catch (err) {
-      setWorkspaceError("Failed to open membership dashboard.");
-    }
-  };
-
-  const handleAddMember = async () => {
-    if (!selectedUserToAdd) return;
-    try {
-      setWorkspaceError(null);
-      await workspaceServices.addMember(membersWorkspace.id, { user_id: selectedUserToAdd });
-      setSelectedUserToAdd('');
-      // Reload members
-      const membersRes = await workspaceServices.listMembers(membersWorkspace.id);
-      setMembersList(membersRes.data);
-    } catch (err) {
-      const msg = err.response?.data?.error || "Failed to add member.";
-      setWorkspaceError(msg);
-    }
-  };
-
-  const handleRemoveMember = async (userId) => {
-    try {
-      setWorkspaceError(null);
-      await workspaceServices.removeMember(membersWorkspace.id, userId);
-      // Reload members
-      const membersRes = await workspaceServices.listMembers(membersWorkspace.id);
-      setMembersList(membersRes.data);
-    } catch (err) {
-      setWorkspaceError("Failed to remove member.");
-    }
+  const handleOpenMembers = (ws) => {
+    setWorkspaceError(null);
+    setMembersWorkspace(ws);
+    setMembersModalOpen(true);
   };
 
   // Boot-time auto-purge for items older than 30 days
@@ -719,13 +687,17 @@ export default function Dashboard() {
                             >
                               Settings
                             </button>
+                            <button 
+                              onClick={() => handleOpenMembers(ws)} 
+                              style={styles.iconBtn} 
+                              title={isOwner ? "Manage Workspace Members" : "View Workspace Members"}
+                            >
+                              Members
+                            </button>
                             {isOwner && !isEditing && (
                               <>
                                 <button onClick={() => handleStartEdit(ws)} style={styles.iconBtn} title="Rename Workspace">
                                   Rename
-                                </button>
-                                <button onClick={() => handleOpenMembers(ws)} style={styles.iconBtn} title="Manage Members">
-                                  Members
                                 </button>
                                 <button onClick={() => handleArchiveWorkspace(ws.id)} style={{ ...styles.iconBtn, color: 'var(--status-error)' }} title="Archive Workspace">
                                   Archive
@@ -772,51 +744,12 @@ export default function Dashboard() {
               )}
 
               {/* Members Management Modal */}
-              {membersModalOpen && membersWorkspace && (
-                <div style={styles.modalOverlay}>
-                  <div style={styles.modalContent}>
-                    <h3 style={styles.modalTitle}>Manage Members for "{membersWorkspace.name}"</h3>
-                    
-                    <div style={{ marginBottom: '16px' }}>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>Add New Member</label>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <select
-                          value={selectedUserToAdd}
-                          onChange={(e) => setSelectedUserToAdd(e.target.value)}
-                          style={styles.selectInput}
-                        >
-                          <option value="">Select a user...</option>
-                          {allUsersList.map(u => (
-                            <option key={u.id} value={u.id}>{u.first_name || u.username}</option>
-                          ))}
-                        </select>
-                        <button onClick={handleAddMember} style={styles.actionBtn}>Add</button>
-                      </div>
-                    </div>
-
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>Current Members</label>
-                    <div style={styles.membersList}>
-                      {membersList.length > 0 ? (
-                        membersList.map(mem => (
-                          <div key={mem.id} style={styles.memberRow}>
-                            <span>{mem.user.first_name || mem.user.username} ({mem.role})</span>
-                            <button onClick={() => handleRemoveMember(mem.user.id)} style={styles.removeBtn}>Remove</button>
-                          </div>
-                        ))
-                      ) : (
-                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No members added yet.</p>
-                      )}
-                    </div>
-
-                    <button 
-                      onClick={() => setMembersModalOpen(false)} 
-                      style={{ ...styles.actionBtn, width: '100%', marginTop: '20px', background: 'var(--bg-hover)', color: 'var(--text-primary)' }}
-                    >
-                      Close Dashboard
-                    </button>
-                  </div>
-                </div>
-              )}
+              <WorkspaceMembersModal
+                workspace={membersWorkspace}
+                isOpen={membersModalOpen}
+                onClose={() => setMembersModalOpen(false)}
+                onWorkspaceUpdated={fetchWorkspaces}
+              />
 
               {/* Workspace Settings & Context Layer Modal */}
               <WorkspaceSettingsModal
@@ -934,7 +867,9 @@ export default function Dashboard() {
                                 value={taskProblemStatement}
                                 onChange={(e) => setTaskProblemStatement(e.target.value)}
                                 placeholder={
-                                  isVoiceListening
+                                  isViewerRole
+                                    ? "🔒 You have read-only (VIEWER) access to this workspace. Task execution is disabled."
+                                    : isVoiceListening
                                     ? "🎙️ Listening... speak in your language (e.g. 'create note', 'book a lab')..."
                                     : "Describe the task to execute, or click Voice Input to speak in English, हिन्दी, বাংলা, or ଓଡ଼ିଆ..."
                                 }
@@ -942,9 +877,11 @@ export default function Dashboard() {
                                   ...styles.taskTextarea,
                                   border: isVoiceListening ? '1px solid var(--status-error, #ef4444)' : styles.taskTextarea.border,
                                   boxShadow: isVoiceListening ? '0 0 0 2px rgba(239, 68, 68, 0.2)' : 'none',
+                                  opacity: isViewerRole ? 0.6 : 1,
+                                  cursor: isViewerRole ? 'not-allowed' : 'text'
                                 }}
                                 rows={3}
-                                disabled={executingTaskId !== null}
+                                disabled={isViewerRole || executingTaskId !== null}
                               />
                             </div>
                             <div style={styles.taskFormActions}>
@@ -957,7 +894,7 @@ export default function Dashboard() {
                                   onLanguageChange={setVoiceLanguage}
                                   error={voiceError}
                                   isSupported={isVoiceSupported}
-                                  disabled={executingTaskId !== null}
+                                  disabled={isViewerRole || executingTaskId !== null}
                                 />
                                 <AudioResponsePlayer
                                   text={taskProblemStatement}
@@ -969,8 +906,13 @@ export default function Dashboard() {
                               <button
                                 type="submit"
                                 className="action-btn"
-                                style={styles.actionBtn}
-                                disabled={executingTaskId !== null || !taskProblemStatement.trim()}
+                                style={{
+                                  ...styles.actionBtn,
+                                  opacity: (isViewerRole || executingTaskId !== null || !taskProblemStatement.trim()) ? 0.5 : 1,
+                                  cursor: (isViewerRole || executingTaskId !== null || !taskProblemStatement.trim()) ? 'not-allowed' : 'pointer'
+                                }}
+                                disabled={isViewerRole || executingTaskId !== null || !taskProblemStatement.trim()}
+                                title={isViewerRole ? "Viewers cannot execute tasks" : ""}
                               >
                                 {executingTaskId ? 'Executing...' : 'Run Task'}
                               </button>
@@ -1460,63 +1402,79 @@ export default function Dashboard() {
                               ⚠️ <strong>Allow Once</strong> executes only this exact command. It does not whitelist future actions.
                             </div>
 
+                            {(() => {
+                              const isTaskCreator = selectedTask?.creator === currentUser?.user_id || selectedTask?.creator_details?.id === currentUser?.user_id;
+                              const canAuthorize = isOwnerOrAdmin || isTaskCreator;
+                              return !canAuthorize ? (
+                                <div style={{ padding: '8px 12px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 'var(--radius-sm)', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                                  🔒 Command authorization is restricted to the Task Creator, Workspace Admin, or Workspace Owner.
+                                </div>
+                              ) : null;
+                            })()}
+
                             {approvalError && (
                               <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.06)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--status-error, #ef4444)' }}>
                                 {approvalError}
                               </div>
                             )}
 
-                            <div style={{ display: 'flex', gap: '12px', marginTop: 'auto', paddingTop: '12px' }}>
-                              <button
-                                id={`modal-approve-btn-${ap.id}`}
-                                onClick={() => handleApproveCommand(selectedTask.id, ap.id)}
-                                disabled={approvalLoading}
-                                style={{
-                                  flex: 1,
-                                  padding: '8px 16px',
-                                  background: 'var(--status-success, #10b981)',
-                                  border: 'none',
-                                  borderRadius: 'var(--radius-sm)',
-                                  color: '#ffffff',
-                                  fontWeight: '600',
-                                  fontSize: 'var(--text-sm)',
-                                  cursor: approvalLoading ? 'not-allowed' : 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  gap: '8px',
-                                  opacity: approvalLoading ? 0.6 : 1,
-                                  boxShadow: '0 2px 4px rgba(16, 185, 129, 0.15)',
-                                  transition: 'var(--transition-all)'
-                                }}
-                              >
-                                {approvalLoading ? '⏳ Processing...' : 'Allow Once'}
-                              </button>
-                              <button
-                                id={`modal-deny-btn-${ap.id}`}
-                                onClick={() => handleDenyCommand(selectedTask.id, ap.id)}
-                                disabled={approvalLoading}
-                                style={{
-                                  flex: 1,
-                                  padding: '8px 16px',
-                                  background: 'rgba(239, 68, 68, 0.08)',
-                                  border: '1px solid var(--status-error, #ef4444)',
-                                  borderRadius: 'var(--radius-sm)',
-                                  color: 'var(--status-error, #ef4444)',
-                                  fontWeight: '600',
-                                  fontSize: 'var(--text-sm)',
-                                  cursor: approvalLoading ? 'not-allowed' : 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  gap: '8px',
-                                  opacity: approvalLoading ? 0.6 : 1,
-                                  transition: 'var(--transition-all)'
-                                }}
-                              >
-                                {approvalLoading ? '⏳ Processing...' : 'Deny'}
-                              </button>
-                            </div>
+                            {(() => {
+                              const isTaskCreator = selectedTask?.creator === currentUser?.user_id || selectedTask?.creator_details?.id === currentUser?.user_id;
+                              const canAuthorize = isOwnerOrAdmin || isTaskCreator;
+                              return (
+                                <div style={{ display: 'flex', gap: '12px', marginTop: 'auto', paddingTop: '12px' }}>
+                                  <button
+                                    id={`modal-approve-btn-${ap.id}`}
+                                    onClick={() => handleApproveCommand(selectedTask.id, ap.id)}
+                                    disabled={!canAuthorize || approvalLoading}
+                                    style={{
+                                      flex: 1,
+                                      padding: '8px 16px',
+                                      background: 'var(--status-success, #10b981)',
+                                      border: 'none',
+                                      borderRadius: 'var(--radius-sm)',
+                                      color: '#ffffff',
+                                      fontWeight: '600',
+                                      fontSize: 'var(--text-sm)',
+                                      cursor: (!canAuthorize || approvalLoading) ? 'not-allowed' : 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      gap: '8px',
+                                      opacity: (!canAuthorize || approvalLoading) ? 0.45 : 1,
+                                      boxShadow: '0 2px 4px rgba(16, 185, 129, 0.15)',
+                                      transition: 'var(--transition-all)'
+                                    }}
+                                  >
+                                    {approvalLoading ? '⏳ Processing...' : 'Allow Once'}
+                                  </button>
+                                  <button
+                                    id={`modal-deny-btn-${ap.id}`}
+                                    onClick={() => handleDenyCommand(selectedTask.id, ap.id)}
+                                    disabled={!canAuthorize || approvalLoading}
+                                    style={{
+                                      flex: 1,
+                                      padding: '8px 16px',
+                                      background: 'rgba(239, 68, 68, 0.08)',
+                                      border: '1px solid var(--status-error, #ef4444)',
+                                      borderRadius: 'var(--radius-sm)',
+                                      color: 'var(--status-error, #ef4444)',
+                                      fontWeight: '600',
+                                      fontSize: 'var(--text-sm)',
+                                      cursor: (!canAuthorize || approvalLoading) ? 'not-allowed' : 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      gap: '8px',
+                                      opacity: (!canAuthorize || approvalLoading) ? 0.45 : 1,
+                                      transition: 'var(--transition-all)'
+                                    }}
+                                  >
+                                    {approvalLoading ? '⏳ Processing...' : 'Deny'}
+                                  </button>
+                                </div>
+                              );
+                            })()}
                           </div>
                         );
                       })()}

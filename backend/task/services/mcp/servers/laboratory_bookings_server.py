@@ -19,6 +19,7 @@ from task.models import LaboratoryBooking
 def main():
     user_id = os.environ.get("SURGE_USER_ID")
     workspace_id = os.environ.get("SURGE_WORKSPACE_ID")
+    user_role = os.environ.get("SURGE_USER_ROLE", "MEMBER")
 
     for line in sys.stdin:
         try:
@@ -100,7 +101,7 @@ def main():
                             },
                             {
                                 "name": "list_user_bookings",
-                                "description": "List all laboratory laboratory bookings made by the user.",
+                                "description": "List all laboratory bookings made by the user.",
                                 "inputSchema": {"type": "object", "properties": {}}
                             }
                         ]
@@ -138,72 +139,87 @@ def main():
                                 text = f"Error: Invalid date format '{date_str}'. Use YYYY-MM-DD."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "create_lab_booking":
-                            lab_name = arguments.get("lab_name")
-                            date_str = arguments.get("date")
-                            start_str = arguments.get("start_time")
-                            end_str = arguments.get("end_time")
-                            
-                            try:
-                                target_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-                                start_t = datetime.datetime.strptime(start_str, "%H:%M").time()
-                                end_t = datetime.datetime.strptime(end_str, "%H:%M").time()
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot book laboratories."}], "isError": True}
+                            else:
+                                lab_name = arguments.get("lab_name")
+                                date_str = arguments.get("date")
+                                start_str = arguments.get("start_time")
+                                end_str = arguments.get("end_time")
                                 
-                                if start_t >= end_t:
-                                    text = "Error: Booking start_time must be earlier than end_time."
-                                else:
-                                    # Check overlaps
-                                    overlapping = LaboratoryBooking.objects.filter(
-                                        workspace=workspace,
-                                        lab_name__iexact=lab_name,
-                                        date=target_date,
-                                        status='CONFIRMED',
-                                        start_time__lt=end_t,
-                                        end_time__gt=start_t
-                                    )
-                                    if overlapping.exists():
-                                        text = f"Error: The requested time slot conflicts with an existing booking in {lab_name}."
+                                try:
+                                    target_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                                    start_t = datetime.datetime.strptime(start_str, "%H:%M").time()
+                                    end_t = datetime.datetime.strptime(end_str, "%H:%M").time()
+                                    
+                                    if start_t >= end_t:
+                                        text = "Error: Booking start_time must be earlier than end_time."
                                     else:
-                                        booking = LaboratoryBooking.objects.create(
+                                        # Check overlaps
+                                        overlapping = LaboratoryBooking.objects.filter(
                                             workspace=workspace,
-                                            user=user,
-                                            lab_name=lab_name,
+                                            lab_name__iexact=lab_name,
                                             date=target_date,
-                                            start_time=start_t,
-                                            end_time=end_t,
-                                            status='CONFIRMED'
+                                            status='CONFIRMED',
+                                            start_time__lt=end_t,
+                                            end_time__gt=start_t
                                         )
-                                        text = f"Successfully created laboratory booking.\nID: {booking.id}\nLab: {booking.lab_name}\nDate: {booking.date}\nTime: {booking.start_time.strftime('%H:%M')} - {booking.end_time.strftime('%H:%M')}\nStatus: {booking.status}"
-                            except ValueError:
-                                text = "Error: Invalid date/time formatting. Use YYYY-MM-DD and HH:MM."
-                            result = {"content": [{"type": "text", "text": text}]}
+                                        if overlapping.exists():
+                                            text = f"Error: The requested time slot conflicts with an existing booking in {lab_name}."
+                                        else:
+                                            booking = LaboratoryBooking.objects.create(
+                                                workspace=workspace,
+                                                user=user,
+                                                lab_name=lab_name,
+                                                date=target_date,
+                                                start_time=start_t,
+                                                end_time=end_t,
+                                                status='CONFIRMED'
+                                            )
+                                            text = f"Successfully created laboratory booking.\nID: {booking.id}\nLab: {booking.lab_name}\nDate: {booking.date}\nTime: {booking.start_time.strftime('%H:%M')} - {booking.end_time.strftime('%H:%M')}\nStatus: {booking.status}"
+                                except ValueError:
+                                    text = "Error: Invalid date/time formatting. Use YYYY-MM-DD and HH:MM."
+                                result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "get_lab_booking":
                             booking_id = arguments.get("booking_id")
                             try:
-                                b = LaboratoryBooking.objects.get(id=booking_id, workspace=workspace, user=user)
+                                if user_role in ['ADMIN', 'OWNER']:
+                                    b = LaboratoryBooking.objects.get(id=booking_id, workspace=workspace)
+                                else:
+                                    b = LaboratoryBooking.objects.get(id=booking_id, workspace=workspace, user=user)
                                 text = f"Laboratory Booking Details:\nID: {b.id}\nLab: {b.lab_name}\nDate: {b.date.isoformat()}\nTime: {b.start_time.strftime('%H:%M')} - {b.end_time.strftime('%H:%M')}\nStatus: {b.status}"
                             except (LaboratoryBooking.DoesNotExist, ValueError):
                                 text = f"Error: Booking with ID '{booking_id}' not found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "cancel_lab_booking":
-                            booking_id = arguments.get("booking_id")
-                            try:
-                                b = LaboratoryBooking.objects.get(id=booking_id, workspace=workspace, user=user)
-                                if b.status != 'CANCELLED':
-                                    b.status = 'CANCELLED'
-                                    b.save()
-                                    text = f"Successfully cancelled booking {b.id}."
-                                else:
-                                    text = f"Booking {b.id} is already cancelled."
-                            except (LaboratoryBooking.DoesNotExist, ValueError):
-                                text = f"Error: Booking with ID '{booking_id}' not found."
-                            result = {"content": [{"type": "text", "text": text}]}
-                        elif tool_name == "list_user_bookings":
-                            bookings = LaboratoryBooking.objects.filter(workspace=workspace, user=user)
-                            if bookings.exists():
-                                lines = [f"- {b.id}: {b.lab_name} on {b.date.isoformat()} ({b.start_time.strftime('%H:%M')}-{b.end_time.strftime('%H:%M')}) [{b.status}]" for b in bookings]
-                                text = "Your laboratory bookings:\n" + "\n".join(lines)
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot cancel lab bookings."}], "isError": True}
                             else:
-                                text = "You have no laboratory bookings."
+                                booking_id = arguments.get("booking_id")
+                                try:
+                                    if user_role in ['ADMIN', 'OWNER']:
+                                        b = LaboratoryBooking.objects.get(id=booking_id, workspace=workspace)
+                                    else:
+                                        b = LaboratoryBooking.objects.get(id=booking_id, workspace=workspace, user=user)
+                                    if b.status != 'CANCELLED':
+                                        b.status = 'CANCELLED'
+                                        b.save()
+                                        text = f"Successfully cancelled booking {b.id}."
+                                    else:
+                                        text = f"Booking {b.id} is already cancelled."
+                                except (LaboratoryBooking.DoesNotExist, ValueError):
+                                    text = f"Error: Booking with ID '{booking_id}' not found."
+                                result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "list_user_bookings":
+                            if user_role in ['ADMIN', 'OWNER']:
+                                bookings = LaboratoryBooking.objects.filter(workspace=workspace)
+                            else:
+                                bookings = LaboratoryBooking.objects.filter(workspace=workspace, user=user)
+                            if bookings.exists():
+                                lines = [f"- {b.id}: {b.lab_name} on {b.date.isoformat()} ({b.start_time.strftime('%H:%M')}-{b.end_time.strftime('%H:%M')}) [{b.status}] (by @{b.user.username})" for b in bookings]
+                                text = "Laboratory bookings:\n" + "\n".join(lines)
+                            else:
+                                text = "No laboratory bookings found."
                             result = {"content": [{"type": "text", "text": text}]}
                         else:
                             result = {"content": [{"type": "text", "text": f"Error: Unknown tool '{tool_name}'"}], "isError": True}

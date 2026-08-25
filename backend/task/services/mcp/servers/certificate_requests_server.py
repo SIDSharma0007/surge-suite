@@ -18,6 +18,7 @@ from task.models import CertificateRequest
 def main():
     user_id = os.environ.get("SURGE_USER_ID")
     workspace_id = os.environ.get("SURGE_WORKSPACE_ID")
+    user_role = os.environ.get("SURGE_USER_ROLE", "MEMBER")
 
     for line in sys.stdin:
         try:
@@ -112,47 +113,65 @@ def main():
                         if not workspace.workflow_execution_enabled:
                             result = {"content": [{"type": "text", "text": "Error: Institutional workflow execution is disabled for this workspace."}], "isError": True}
                         elif tool_name == "create_certificate_request":
-                            cert_type = arguments.get("certificate_type")
-                            reason = arguments.get("reason", "")
-                            
-                            req_obj = CertificateRequest.objects.create(
-                                workspace=workspace,
-                                user=user,
-                                certificate_type=cert_type,
-                                description=reason,
-                                status='PENDING'
-                            )
-                            text = f"Successfully created certificate request.\nID: {req_obj.id}\nType: {req_obj.certificate_type}\nStatus: {req_obj.status}"
-                            result = {"content": [{"type": "text", "text": text}]}
-                        elif tool_name == "list_certificate_requests":
-                            reqs = CertificateRequest.objects.filter(workspace=workspace, user=user)
-                            if reqs.exists():
-                                lines = [f"- {r.id}: {r.certificate_type} [{r.status}]" for r in reqs]
-                                text = "Your certificate requests:\n" + "\n".join(lines)
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot submit certificate requests."}], "isError": True}
                             else:
-                                text = "You have no certificate requests."
+                                cert_type = arguments.get("certificate_type")
+                                reason = arguments.get("reason", "")
+                                
+                                req_obj = CertificateRequest.objects.create(
+                                    workspace=workspace,
+                                    user=user,
+                                    certificate_type=cert_type,
+                                    description=reason,
+                                    status='PENDING'
+                                )
+                                text = f"Successfully created certificate request.\nID: {req_obj.id}\nType: {req_obj.certificate_type}\nStatus: {req_obj.status}"
+                                result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "list_certificate_requests":
+                            if user_role in ['ADMIN', 'OWNER']:
+                                reqs = CertificateRequest.objects.filter(workspace=workspace)
+                            else:
+                                reqs = CertificateRequest.objects.filter(workspace=workspace, user=user)
+                            if reqs.exists():
+                                lines = [f"- {r.id}: {r.certificate_type} [{r.status}] (by @{r.user.username})" for r in reqs]
+                                text = "Certificate requests:\n" + "\n".join(lines)
+                            else:
+                                text = "No certificate requests found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name in ["get_certificate_request", "get_certificate_status"]:
                             request_id = arguments.get("request_id")
                             try:
-                                r = CertificateRequest.objects.get(id=request_id, workspace=workspace, user=user)
+                                if user_role in ['ADMIN', 'OWNER']:
+                                    r = CertificateRequest.objects.get(id=request_id, workspace=workspace)
+                                else:
+                                    r = CertificateRequest.objects.get(id=request_id, workspace=workspace, user=user)
                                 text = f"Certificate Request Details:\nID: {r.id}\nType: {r.certificate_type}\nDescription: {r.description}\nStatus: {r.status}\nCreated: {r.created_at.isoformat()}"
                             except (CertificateRequest.DoesNotExist, ValueError):
                                 text = f"Error: Certificate request with ID '{request_id}' not found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "cancel_certificate_request":
-                            request_id = arguments.get("request_id")
-                            try:
-                                r = CertificateRequest.objects.get(id=request_id, workspace=workspace, user=user)
-                                if r.status in ['PENDING', 'PROCESSING']:
-                                    r.status = 'CANCELLED'
-                                    r.save()
-                                    text = f"Successfully cancelled certificate request {r.id}."
-                                else:
-                                    text = f"Cannot cancel request {r.id} because status is {r.status}."
-                            except (CertificateRequest.DoesNotExist, ValueError):
-                                text = f"Error: Certificate request with ID '{request_id}' not found."
-                            result = {"content": [{"type": "text", "text": text}]}
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot cancel certificate requests."}], "isError": True}
+                            else:
+                                request_id = arguments.get("request_id")
+                                try:
+                                    if user_role in ['ADMIN', 'OWNER']:
+                                        r = CertificateRequest.objects.get(id=request_id, workspace=workspace)
+                                    else:
+                                        r = CertificateRequest.objects.get(id=request_id, workspace=workspace, user=user)
+                                        if r.status != 'PENDING':
+                                            return {"content": [{"type": "text", "text": f"Permission Denied: Members can only cancel requests in PENDING status. Current status is '{r.status}'."}], "isError": True}
+                                    
+                                    if r.status in ['PENDING', 'PROCESSING']:
+                                        r.status = 'CANCELLED'
+                                        r.save()
+                                        text = f"Successfully cancelled certificate request {r.id}."
+                                    else:
+                                        text = f"Cannot cancel request {r.id} because status is {r.status}."
+                                except (CertificateRequest.DoesNotExist, ValueError):
+                                    text = f"Error: Certificate request with ID '{request_id}' not found."
+                                result = {"content": [{"type": "text", "text": text}]}
                         else:
                             result = {"content": [{"type": "text", "text": f"Error: Unknown tool '{tool_name}'"}], "isError": True}
                     except Workspace.DoesNotExist:
