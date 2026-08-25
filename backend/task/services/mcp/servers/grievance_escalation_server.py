@@ -18,6 +18,7 @@ from task.models import GrievanceEscalation
 def main():
     user_id = os.environ.get("SURGE_USER_ID")
     workspace_id = os.environ.get("SURGE_WORKSPACE_ID")
+    user_role = os.environ.get("SURGE_USER_ROLE", "MEMBER")
 
     for line in sys.stdin:
         try:
@@ -87,7 +88,7 @@ def main():
                             },
                             {
                                 "name": "escalate_grievance",
-                                "description": "Escalate a grievance to a higher authority.",
+                                "description": "Escalate a grievance to a higher authority (Admin/Owner or creator).",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -126,59 +127,80 @@ def main():
                         if not workspace.workflow_execution_enabled:
                             result = {"content": [{"type": "text", "text": "Error: Institutional workflow execution is disabled for this workspace."}], "isError": True}
                         elif tool_name == "create_grievance":
-                            subject = arguments.get("subject")
-                            description = arguments.get("description")
-                            department = arguments.get("department", "")
-                            
-                            grievance = GrievanceEscalation.objects.create(
-                                workspace=workspace,
-                                user=user,
-                                subject=subject,
-                                description=description,
-                                department=department,
-                                status='OPEN'
-                            )
-                            text = f"Successfully raised grievance.\nID: {grievance.id}\nSubject: {grievance.subject}\nDepartment: {grievance.department}\nStatus: {grievance.status}"
-                            result = {"content": [{"type": "text", "text": text}]}
-                        elif tool_name == "list_grievances":
-                            grievances = GrievanceEscalation.objects.filter(workspace=workspace, user=user)
-                            if grievances.exists():
-                                lines = [f"- {g.id}: {g.subject} [{g.status}]" for g in grievances]
-                                text = "Your filed grievances:\n" + "\n".join(lines)
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot raise grievances."}], "isError": True}
                             else:
-                                text = "You have not raised any grievances."
+                                subject = arguments.get("subject")
+                                description = arguments.get("description")
+                                department = arguments.get("department", "")
+                                
+                                grievance = GrievanceEscalation.objects.create(
+                                    workspace=workspace,
+                                    user=user,
+                                    subject=subject,
+                                    description=description,
+                                    department=department,
+                                    status='OPEN'
+                                )
+                                text = f"Successfully raised grievance.\nID: {grievance.id}\nSubject: {grievance.subject}\nDepartment: {grievance.department}\nStatus: {grievance.status}"
+                                result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "list_grievances":
+                            if user_role in ['ADMIN', 'OWNER']:
+                                grievances = GrievanceEscalation.objects.filter(workspace=workspace)
+                            else:
+                                grievances = GrievanceEscalation.objects.filter(workspace=workspace, user=user)
+                            if grievances.exists():
+                                lines = [f"- {g.id}: {g.subject} [{g.status}] (by @{g.user.username})" for g in grievances]
+                                text = "Grievances:\n" + "\n".join(lines)
+                            else:
+                                text = "No grievances found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name in ["get_grievance", "get_grievance_status"]:
                             grievance_id = arguments.get("grievance_id")
                             try:
-                                g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
+                                if user_role in ['ADMIN', 'OWNER']:
+                                    g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace)
+                                else:
+                                    g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
                                 text = f"Grievance Details:\nID: {g.id}\nSubject: {g.subject}\nDescription: {g.description}\nDepartment: {g.department}\nStatus: {g.status}\nCreated: {g.created_at.isoformat()}"
                             except (GrievanceEscalation.DoesNotExist, ValueError):
                                 text = f"Error: Grievance with ID '{grievance_id}' not found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "update_grievance":
-                            grievance_id = arguments.get("grievance_id")
-                            description = arguments.get("description")
-                            try:
-                                g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
-                                g.description = description
-                                g.save()
-                                text = f"Successfully updated grievance {g.id} description."
-                            except (GrievanceEscalation.DoesNotExist, ValueError):
-                                text = f"Error: Grievance with ID '{grievance_id}' not found."
-                            result = {"content": [{"type": "text", "text": text}]}
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot update grievances."}], "isError": True}
+                            else:
+                                grievance_id = arguments.get("grievance_id")
+                                description = arguments.get("description")
+                                try:
+                                    if user_role in ['ADMIN', 'OWNER']:
+                                        g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace)
+                                    else:
+                                        g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
+                                    g.description = description
+                                    g.save()
+                                    text = f"Successfully updated grievance {g.id} description."
+                                except (GrievanceEscalation.DoesNotExist, ValueError):
+                                    text = f"Error: Grievance with ID '{grievance_id}' not found."
+                                result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "escalate_grievance":
-                            grievance_id = arguments.get("grievance_id")
-                            reason = arguments.get("reason", "")
-                            try:
-                                g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
-                                g.status = 'ESCALATED'
-                                g.description += f"\n[Escalation Reason: {reason}]"
-                                g.save()
-                                text = f"Successfully escalated grievance {g.id}."
-                            except (GrievanceEscalation.DoesNotExist, ValueError):
-                                text = f"Error: Grievance with ID '{grievance_id}' not found."
-                            result = {"content": [{"type": "text", "text": text}]}
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot escalate grievances."}], "isError": True}
+                            else:
+                                grievance_id = arguments.get("grievance_id")
+                                reason = arguments.get("reason", "")
+                                try:
+                                    if user_role in ['ADMIN', 'OWNER']:
+                                        g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace)
+                                    else:
+                                        g = GrievanceEscalation.objects.get(id=grievance_id, workspace=workspace, user=user)
+                                    g.status = 'ESCALATED'
+                                    g.description += f"\n[Escalation Reason: {reason}]"
+                                    g.save()
+                                    text = f"Successfully escalated grievance {g.id}."
+                                except (GrievanceEscalation.DoesNotExist, ValueError):
+                                    text = f"Error: Grievance with ID '{grievance_id}' not found."
+                                result = {"content": [{"type": "text", "text": text}]}
                         else:
                             result = {"content": [{"type": "text", "text": f"Error: Unknown tool '{tool_name}'"}], "isError": True}
                     except Workspace.DoesNotExist:

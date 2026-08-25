@@ -33,7 +33,9 @@ class ApprovalRequiredException(Exception):
 
 
 class CapabilityRegistry:
-    def __init__(self):
+    def __init__(self, user=None, workspace=None):
+        self.user = user
+        self.workspace = workspace
         self.capabilities = {}
         self.register_default_capabilities()
 
@@ -57,14 +59,14 @@ class CapabilityRegistry:
             for cap in self.capabilities.values()
         ]
 
-    def execute_tool(self, name: str, arguments: dict) -> dict:
+    def execute_tool(self, name: str, arguments: dict, **kwargs) -> dict:
         if name not in self.capabilities:
             return {"error": f"Tool '{name}' is not registered."}
         try:
             handler = self.capabilities[name]["handler"]
-            return handler(arguments)
+            return handler(arguments, **kwargs)
         except ApprovalRequiredException:
-            # Re-raise security exceptions so the caller can handle them
+            # Re-raise approval exception so the execution loop / caller can pause for HITL
             raise
         except Exception as e:
             return {"error": str(e)}
@@ -221,7 +223,16 @@ class CapabilityRegistry:
     # Tool handlers
     # ------------------------------------------------------------------
 
-    def handle_database_query(self, args: dict) -> dict:
+    def handle_database_query(self, args: dict, user=None, workspace=None, **kwargs) -> dict:
+        resolved_user = user or self.user
+        resolved_workspace = workspace or self.workspace
+        if resolved_user and resolved_workspace:
+            user_role = "OWNER" if resolved_workspace.owner == resolved_user else (
+                resolved_workspace.memberships.filter(user=resolved_user).values_list('role', flat=True).first() or "ANONYMOUS"
+            )
+            if user_role not in ["ADMIN", "OWNER"]:
+                raise PermissionDenied(f"Permission Denied: Users with role '{user_role}' are not authorized to run direct database queries. ADMIN or OWNER role is required.")
+
         sql = args.get("sql", "").strip()
         sql_lower = sql.lower()
 
@@ -251,7 +262,7 @@ class CapabilityRegistry:
         except Exception as e:
             return {"error": str(e)}
 
-    def handle_bash_execute(self, args: dict, task=None, execution=None, approved=False, **kwargs) -> dict:
+    def handle_bash_execute(self, args: dict, task=None, execution=None, approved=False, user=None, workspace=None, **kwargs) -> dict:
         """
         Execute a shell command using the three-tier security policy:
 
@@ -259,6 +270,15 @@ class CapabilityRegistry:
         REQUIRES_APPROVAL → raise ApprovalRequiredException (caller must pause)
         BLOCKED           → raise PermissionDenied (permanently rejected)
         """
+        resolved_user = user or self.user or (execution.user if execution else None) or (task.user if task else None)
+        resolved_workspace = workspace or self.workspace or (execution.workspace if execution else None) or (task.workspace if task else None)
+        if resolved_user and resolved_workspace:
+            user_role = "OWNER" if resolved_workspace.owner == resolved_user else (
+                resolved_workspace.memberships.filter(user=resolved_user).values_list('role', flat=True).first() or "ANONYMOUS"
+            )
+            if user_role not in ["ADMIN", "OWNER"]:
+                raise PermissionDenied(f"Permission Denied: Users with role '{user_role}' are not authorized to execute shell commands. ADMIN or OWNER role is required.")
+
         command_clean = args.get("command", "").strip()
 
         tier = self._classify_command(command_clean)

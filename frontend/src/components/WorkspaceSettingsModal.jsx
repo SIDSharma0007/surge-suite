@@ -22,6 +22,11 @@ import {
 export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onWorkspaceUpdated }) {
   const [activeTab, setActiveTab] = useState('system'); // 'system' | 'context' | 'policies' | 'workflows'
   
+  // Role based access
+  const userRole = workspace?.role || 'MEMBER';
+  const isOwnerOrAdmin = userRole === 'OWNER' || userRole === 'ADMIN';
+  const isViewer = userRole === 'VIEWER';
+
   // System Prompt State
   const [systemPrompt, setSystemPrompt] = useState('');
   const [promptSaving, setPromptSaving] = useState(false);
@@ -473,6 +478,18 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
         </div>
 
         {/* Notification Alerts */}
+        {!isOwnerOrAdmin && (
+          <div style={{ ...styles.guardNotice, marginBottom: '16px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+            <ShieldCheck size={16} style={{ color: 'var(--text-secondary)', flexShrink: 0, marginTop: '2px' }} />
+            <div>
+              <strong style={{ fontSize: '12px', color: 'var(--text-primary)' }}>Role Access: {userRole}</strong>
+              <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                You have view access. System prompt modifications, institutional intelligence configurations, policy authoring, and skill registrations require <strong>ADMIN</strong> or <strong>OWNER</strong> role.
+              </p>
+            </div>
+          </div>
+        )}
+
         {errorMsg && (
           <div style={styles.errorBanner}>
             <AlertCircle size={15} style={{ marginRight: '8px', flexShrink: 0 }} />
@@ -509,9 +526,14 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                 <textarea
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
-                  placeholder="e.g. You are a Senior Solutions Architect. Prioritize robust error handling, clean interfaces, and concise explanations."
+                  disabled={!isOwnerOrAdmin}
+                  placeholder={isOwnerOrAdmin ? "e.g. You are a Senior Solutions Architect. Prioritize robust error handling, clean interfaces, and concise explanations." : "System prompt is locked. Only Admin or Owner can edit."}
                   rows={4}
-                  style={styles.textareaInput}
+                  style={{
+                    ...styles.textareaInput,
+                    opacity: !isOwnerOrAdmin ? 0.7 : 1,
+                    cursor: !isOwnerOrAdmin ? 'not-allowed' : 'text'
+                  }}
                 />
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
@@ -520,11 +542,11 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                   </span>
                   <button
                     onClick={handleSaveSystemPrompt}
-                    disabled={promptSaving || !systemPrompt.trim()}
+                    disabled={!isOwnerOrAdmin || promptSaving || !systemPrompt.trim()}
                     style={{
                       ...styles.primaryActionBtn,
-                      opacity: (promptSaving || !systemPrompt.trim()) ? 0.45 : 1,
-                      cursor: (promptSaving || !systemPrompt.trim()) ? 'not-allowed' : 'pointer'
+                      opacity: (!isOwnerOrAdmin || promptSaving || !systemPrompt.trim()) ? 0.45 : 1,
+                      cursor: (!isOwnerOrAdmin || promptSaving || !systemPrompt.trim()) ? 'not-allowed' : 'pointer'
                     }}
                   >
                     <Save size={13} style={{ marginRight: '6px' }} />
@@ -559,7 +581,8 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                       type="checkbox"
                       checked={institutionalKnowledgeEnabled}
                       onChange={(e) => setInstitutionalKnowledgeEnabled(e.target.checked)}
-                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                      disabled={!isOwnerOrAdmin}
+                      style={{ cursor: !isOwnerOrAdmin ? 'not-allowed' : 'pointer', width: '16px', height: '16px' }}
                     />
                   </div>
 
@@ -574,7 +597,8 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                       type="checkbox"
                       checked={policyEngineEnabled}
                       onChange={(e) => setPolicyEngineEnabled(e.target.checked)}
-                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                      disabled={!isOwnerOrAdmin}
+                      style={{ cursor: !isOwnerOrAdmin ? 'not-allowed' : 'pointer', width: '16px', height: '16px' }}
                     />
                   </div>
 
@@ -589,7 +613,8 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                       type="checkbox"
                       checked={workflowExecutionEnabled}
                       onChange={(e) => setWorkflowExecutionEnabled(e.target.checked)}
-                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                      disabled={!isOwnerOrAdmin}
+                      style={{ cursor: !isOwnerOrAdmin ? 'not-allowed' : 'pointer', width: '16px', height: '16px' }}
                     />
                   </div>
 
@@ -603,26 +628,30 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                         type="number"
                         value={contextWindowLimit}
                         onChange={(e) => setContextWindowLimit(parseInt(e.target.value) || 10000)}
-                        style={{ ...styles.textInput, width: '120px' }}
+                        disabled={!isOwnerOrAdmin}
+                        style={{ ...styles.textInput, width: '120px', cursor: !isOwnerOrAdmin ? 'not-allowed' : 'text' }}
                       />
                       <button
                         type="button"
                         onClick={() => setContextWindowLimit(10000)}
-                        style={styles.secondaryBtn}
+                        disabled={!isOwnerOrAdmin}
+                        style={{ ...styles.secondaryBtn, opacity: !isOwnerOrAdmin ? 0.5 : 1, cursor: !isOwnerOrAdmin ? 'not-allowed' : 'pointer' }}
                       >
                         10k chars
                       </button>
                       <button
                         type="button"
                         onClick={() => setContextWindowLimit(20000)}
-                        style={styles.secondaryBtn}
+                        disabled={!isOwnerOrAdmin}
+                        style={{ ...styles.secondaryBtn, opacity: !isOwnerOrAdmin ? 0.5 : 1, cursor: !isOwnerOrAdmin ? 'not-allowed' : 'pointer' }}
                       >
                         20k chars
                       </button>
                       <button
                         type="button"
                         onClick={() => setContextWindowLimit(50000)}
-                        style={styles.secondaryBtn}
+                        disabled={!isOwnerOrAdmin}
+                        style={{ ...styles.secondaryBtn, opacity: !isOwnerOrAdmin ? 0.5 : 1, cursor: !isOwnerOrAdmin ? 'not-allowed' : 'pointer' }}
                       >
                         50k chars
                       </button>
@@ -636,11 +665,11 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '14px' }}>
                   <button
                     onClick={handleSaveSystemPrompt}
-                    disabled={promptSaving}
+                    disabled={!isOwnerOrAdmin || promptSaving}
                     style={{
                       ...styles.primaryActionBtn,
-                      opacity: promptSaving ? 0.45 : 1,
-                      cursor: promptSaving ? 'not-allowed' : 'pointer'
+                      opacity: (!isOwnerOrAdmin || promptSaving) ? 0.45 : 1,
+                      cursor: (!isOwnerOrAdmin || promptSaving) ? 'not-allowed' : 'pointer'
                     }}
                   >
                     <Save size={13} style={{ marginRight: '6px' }} />
@@ -664,92 +693,98 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                   Skills provide structured behavioral rules and domain protocols. Skills remain strictly separate from ordinary context data.
                 </p>
 
-                {/* Upload or Add Skill */}
-                <form onSubmit={handleAddSkill} style={styles.skillUploadBox}>
-                  {!showManualSkillForm ? (
-                    <div>
-                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <input
-                          type="file"
-                          accept=".md"
-                          ref={fileInputSkillRef}
-                          onChange={(e) => setSkillFile(e.target.files[0])}
-                          style={styles.fileInput}
-                        />
-                        <button
-                          type="submit"
-                          disabled={skillAdding || !skillFile}
-                          style={{
-                            ...styles.primaryActionBtn,
-                            opacity: (skillAdding || !skillFile) ? 0.45 : 1,
-                            cursor: (skillAdding || !skillFile) ? 'not-allowed' : 'pointer'
-                          }}
-                        >
-                          <Upload size={13} style={{ marginRight: '6px' }} />
-                          {skillAdding ? 'Uploading...' : 'Upload Skill .md'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowManualSkillForm(true)}
-                          style={styles.secondaryBtn}
-                        >
-                          <Plus size={13} style={{ marginRight: '6px' }} />
-                          Write Skill Manually
-                        </button>
+                {/* Upload or Add Skill (Admins/Owners only) */}
+                {isOwnerOrAdmin ? (
+                  <form onSubmit={handleAddSkill} style={styles.skillUploadBox}>
+                    {!showManualSkillForm ? (
+                      <div>
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <input
+                            type="file"
+                            accept=".md"
+                            ref={fileInputSkillRef}
+                            onChange={(e) => setSkillFile(e.target.files[0])}
+                            style={styles.fileInput}
+                          />
+                          <button
+                            type="submit"
+                            disabled={skillAdding || !skillFile}
+                            style={{
+                              ...styles.primaryActionBtn,
+                              opacity: (skillAdding || !skillFile) ? 0.45 : 1,
+                              cursor: (skillAdding || !skillFile) ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            <Upload size={13} style={{ marginRight: '6px' }} />
+                            {skillAdding ? 'Uploading...' : 'Upload Skill .md'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowManualSkillForm(true)}
+                            style={styles.secondaryBtn}
+                          >
+                            <Plus size={13} style={{ marginRight: '6px' }} />
+                            Write Skill Manually
+                          </button>
+                        </div>
+                        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                          * Only Markdown files ending with <code>.md</code> are accepted.
+                        </p>
                       </div>
-                      <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
-                        * Only Markdown files ending with <code>.md</code> are accepted.
-                      </p>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
-                      <div style={{ display: 'flex', gap: '10px' }}>
-                        <input
-                          type="text"
-                          value={newSkillName}
-                          onChange={(e) => setNewSkillName(e.target.value)}
-                          placeholder="Skill Name (e.g. security-audit.md)"
-                          style={{ ...styles.textInput, flex: 1 }}
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                          <input
+                            type="text"
+                            value={newSkillName}
+                            onChange={(e) => setNewSkillName(e.target.value)}
+                            placeholder="Skill Name (e.g. security-audit.md)"
+                            style={{ ...styles.textInput, flex: 1 }}
+                          />
+                          <input
+                            type="text"
+                            value={newSkillDesc}
+                            onChange={(e) => setNewSkillDesc(e.target.value)}
+                            placeholder="Brief Description (optional)"
+                            style={{ ...styles.textInput, flex: 1.5 }}
+                          />
+                        </div>
+                        <textarea
+                          value={newSkillContent}
+                          onChange={(e) => setNewSkillContent(e.target.value)}
+                          placeholder="# Skill Protocol&#10;1. Check input boundaries...&#10;2. Enforce authentication..."
+                          rows={4}
+                          style={styles.textareaInput}
                         />
-                        <input
-                          type="text"
-                          value={newSkillDesc}
-                          onChange={(e) => setNewSkillDesc(e.target.value)}
-                          placeholder="Brief Description (optional)"
-                          style={{ ...styles.textInput, flex: 1.5 }}
-                        />
+                        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            onClick={() => setShowManualSkillForm(false)}
+                            style={styles.secondaryBtn}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={skillAdding || !newSkillName.trim() || !newSkillContent.trim()}
+                            style={{
+                              ...styles.primaryActionBtn,
+                              opacity: (skillAdding || !newSkillName.trim() || !newSkillContent.trim()) ? 0.45 : 1,
+                              cursor: (skillAdding || !newSkillName.trim() || !newSkillContent.trim()) ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            <Plus size={13} style={{ marginRight: '6px' }} />
+                            {skillAdding ? 'Adding...' : 'Save Skill'}
+                          </button>
+                        </div>
                       </div>
-                      <textarea
-                        value={newSkillContent}
-                        onChange={(e) => setNewSkillContent(e.target.value)}
-                        placeholder="# Skill Protocol&#10;1. Check input boundaries...&#10;2. Enforce authentication..."
-                        rows={4}
-                        style={styles.textareaInput}
-                      />
-                      <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                        <button
-                          type="button"
-                          onClick={() => setShowManualSkillForm(false)}
-                          style={styles.secondaryBtn}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={skillAdding || !newSkillName.trim() || !newSkillContent.trim()}
-                          style={{
-                            ...styles.primaryActionBtn,
-                            opacity: (skillAdding || !newSkillName.trim() || !newSkillContent.trim()) ? 0.45 : 1,
-                            cursor: (skillAdding || !newSkillName.trim() || !newSkillContent.trim()) ? 'not-allowed' : 'pointer'
-                          }}
-                        >
-                          <Plus size={13} style={{ marginRight: '6px' }} />
-                          {skillAdding ? 'Adding...' : 'Save Skill'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </form>
+                    )}
+                  </form>
+                ) : (
+                  <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '8px' }}>
+                    🔒 Registering or uploading workspace skills is restricted to workspace <strong>ADMIN</strong> or <strong>OWNER</strong>.
+                  </p>
+                )}
 
                 {/* Skills List */}
                 <div style={{ marginTop: '16px' }}>
@@ -772,18 +807,20 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                               </div>
                             </div>
                           </div>
-                          <button
-                            onClick={() => handleRemoveSkill(s.id)}
-                            style={styles.deleteIconBtn}
-                            title="Delete skill"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {isOwnerOrAdmin && (
+                            <button
+                              onClick={() => handleRemoveSkill(s.id)}
+                              style={styles.deleteIconBtn}
+                              title="Delete skill"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p style={styles.emptyText}>No skills registered yet. Upload a <code>.md</code> file above.</p>
+                    <p style={styles.emptyText}>No skills registered yet.</p>
                   )}
                 </div>
               </div>
@@ -807,119 +844,127 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
               </div>
 
               {/* Add Context Form */}
-              <div style={{ ...styles.cardSection, marginTop: '16px' }}>
-                <div style={styles.sectionTitleRow}>
-                  <h4 style={styles.sectionTitle}>Add Workspace Context</h4>
-                  <div style={styles.modeToggleGroup}>
-                    <button
-                      type="button"
-                      onClick={() => setContextUploadMode('file')}
-                      style={{
-                        ...styles.modeToggleBtn,
-                        background: contextUploadMode === 'file' ? 'var(--bg-card)' : 'transparent',
-                        color: contextUploadMode === 'file' ? 'var(--text-primary)' : 'var(--text-muted)'
-                      }}
-                    >
-                      <Upload size={12} style={{ marginRight: '4px' }} />
-                      File Upload
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setContextUploadMode('text')}
-                      style={{
-                        ...styles.modeToggleBtn,
-                        background: contextUploadMode === 'text' ? 'var(--bg-card)' : 'transparent',
-                        color: contextUploadMode === 'text' ? 'var(--text-primary)' : 'var(--text-muted)'
-                      }}
-                    >
-                      <FileType size={12} style={{ marginRight: '4px' }} />
-                      Manual Text
-                    </button>
-                  </div>
-                </div>
-
-                <form onSubmit={handleAddContext} style={{ marginTop: '12px' }}>
-                  <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                    <input
-                      type="text"
-                      value={newContextName}
-                      onChange={(e) => setNewContextName(e.target.value)}
-                      placeholder={contextUploadMode === 'file' ? "Context Name (optional, defaults to filename)" : "Context Title (e.g. Q3 API Specification)"}
-                      style={{ ...styles.textInput, flex: 2, minWidth: '200px' }}
-                    />
-                    <select
-                      value={newContextType}
-                      onChange={(e) => setNewContextType(e.target.value)}
-                      style={{ ...styles.selectInput, flex: 1, minWidth: '160px' }}
-                    >
-                      <option value="USER_CONTEXT">User Context (General)</option>
-                      <option value="REFERENCE">Reference Document</option>
-                      <option value="INSTITUTIONAL_REFERENCE">Institutional Reference</option>
-                    </select>
+              {!isViewer ? (
+                <div style={{ ...styles.cardSection, marginTop: '16px' }}>
+                  <div style={styles.sectionTitleRow}>
+                    <h4 style={styles.sectionTitle}>Add Workspace Context</h4>
+                    <div style={styles.modeToggleGroup}>
+                      <button
+                        type="button"
+                        onClick={() => setContextUploadMode('file')}
+                        style={{
+                          ...styles.modeToggleBtn,
+                          background: contextUploadMode === 'file' ? 'var(--bg-card)' : 'transparent',
+                          color: contextUploadMode === 'file' ? 'var(--text-primary)' : 'var(--text-muted)'
+                        }}
+                      >
+                        <Upload size={12} style={{ marginRight: '4px' }} />
+                        File Upload
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setContextUploadMode('text')}
+                        style={{
+                          ...styles.modeToggleBtn,
+                          background: contextUploadMode === 'text' ? 'var(--bg-card)' : 'transparent',
+                          color: contextUploadMode === 'text' ? 'var(--text-primary)' : 'var(--text-muted)'
+                        }}
+                      >
+                        <FileType size={12} style={{ marginRight: '4px' }} />
+                        Manual Text
+                      </button>
+                    </div>
                   </div>
 
-                  {contextUploadMode === 'file' ? (
-                    <div>
-                      <div style={styles.dropzone}>
-                        <input
-                          type="file"
-                          accept=".pdf,.txt,.md,.markdown,.csv,.docx,.json,.html"
-                          ref={fileInputContextRef}
-                          onChange={(e) => setContextFile(e.target.files[0])}
-                          style={styles.fileInput}
-                        />
-                        <div style={{ textAlign: 'center', pointerEvents: 'none' }}>
-                          <Upload size={20} style={{ color: 'var(--text-muted)', marginBottom: '6px' }} />
-                          <p style={{ margin: 0, fontSize: '12px', fontWeight: '500', color: 'var(--text-primary)' }}>
-                            {contextFile ? contextFile.name : "Select or drag a context document here"}
-                          </p>
-                          <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
-                            Supported: PDF, TXT, MD, CSV, DOCX, JSON, HTML (Max 10MB)
-                          </p>
+                  <form onSubmit={handleAddContext} style={{ marginTop: '12px' }}>
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        value={newContextName}
+                        onChange={(e) => setNewContextName(e.target.value)}
+                        placeholder={contextUploadMode === 'file' ? "Context Name (optional, defaults to filename)" : "Context Title (e.g. Q3 API Specification)"}
+                        style={{ ...styles.textInput, flex: 2, minWidth: '200px' }}
+                      />
+                      <select
+                        value={newContextType}
+                        onChange={(e) => setNewContextType(e.target.value)}
+                        style={{ ...styles.selectInput, flex: 1, minWidth: '160px' }}
+                      >
+                        <option value="USER_CONTEXT">User Context (General)</option>
+                        <option value="REFERENCE">Reference Document</option>
+                        <option value="INSTITUTIONAL_REFERENCE">Institutional Reference</option>
+                      </select>
+                    </div>
+
+                    {contextUploadMode === 'file' ? (
+                      <div>
+                        <div style={styles.dropzone}>
+                          <input
+                            type="file"
+                            accept=".pdf,.txt,.md,.markdown,.csv,.docx,.json,.html"
+                            ref={fileInputContextRef}
+                            onChange={(e) => setContextFile(e.target.files[0])}
+                            style={styles.fileInput}
+                          />
+                          <div style={{ textAlign: 'center', pointerEvents: 'none' }}>
+                            <Upload size={20} style={{ color: 'var(--text-muted)', marginBottom: '6px' }} />
+                            <p style={{ margin: 0, fontSize: '12px', fontWeight: '500', color: 'var(--text-primary)' }}>
+                              {contextFile ? contextFile.name : "Select or drag a context document here"}
+                            </p>
+                            <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
+                              Supported: PDF, TXT, MD, CSV, DOCX, JSON, HTML (Max 10MB)
+                            </p>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                          <button
+                            type="submit"
+                            disabled={contextAdding || !contextFile}
+                            style={{
+                              ...styles.primaryActionBtn,
+                              opacity: (contextAdding || !contextFile) ? 0.45 : 1,
+                              cursor: (contextAdding || !contextFile) ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            <Upload size={13} style={{ marginRight: '6px' }} />
+                            {contextAdding ? 'Processing Document...' : 'Upload & Normalize Document'}
+                          </button>
                         </div>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
-                        <button
-                          type="submit"
-                          disabled={contextAdding || !contextFile}
-                          style={{
-                            ...styles.primaryActionBtn,
-                            opacity: (contextAdding || !contextFile) ? 0.45 : 1,
-                            cursor: (contextAdding || !contextFile) ? 'not-allowed' : 'pointer'
-                          }}
-                        >
-                          <Upload size={13} style={{ marginRight: '6px' }} />
-                          {contextAdding ? 'Processing Document...' : 'Upload & Normalize Document'}
-                        </button>
+                    ) : (
+                      <div>
+                        <textarea
+                          value={newContextText}
+                          onChange={(e) => setNewContextText(e.target.value)}
+                          placeholder="Paste or write reference context data here (e.g. database schema details, organizational hierarchy, product specs)..."
+                          rows={4}
+                          style={styles.textareaInput}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                          <button
+                            type="submit"
+                            disabled={contextAdding || !newContextText.trim()}
+                            style={{
+                              ...styles.primaryActionBtn,
+                              opacity: (contextAdding || !newContextText.trim()) ? 0.45 : 1,
+                              cursor: (contextAdding || !newContextText.trim()) ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            <Plus size={13} style={{ marginRight: '6px' }} />
+                            {contextAdding ? 'Adding Context...' : 'Add Context Entry'}
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div>
-                      <textarea
-                        value={newContextText}
-                        onChange={(e) => setNewContextText(e.target.value)}
-                        placeholder="Paste or write reference context data here (e.g. database schema details, organizational hierarchy, product specs)..."
-                        rows={4}
-                        style={styles.textareaInput}
-                      />
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
-                        <button
-                          type="submit"
-                          disabled={contextAdding || !newContextText.trim()}
-                          style={{
-                            ...styles.primaryActionBtn,
-                            opacity: (contextAdding || !newContextText.trim()) ? 0.45 : 1,
-                            cursor: (contextAdding || !newContextText.trim()) ? 'not-allowed' : 'pointer'
-                          }}
-                        >
-                          <Plus size={13} style={{ marginRight: '6px' }} />
-                          {contextAdding ? 'Adding Context...' : 'Add Context Entry'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </form>
-              </div>
+                    )}
+                  </form>
+                </div>
+              ) : (
+                <div style={{ padding: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 'var(--radius-sm)', marginTop: '16px' }}>
+                  <p style={{ margin: 0, fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                    👁️ Context upload and creation are disabled for <strong>VIEWER</strong> accounts.
+                  </p>
+                </div>
+              )}
 
               {/* Stored Context Items List */}
               <div style={{ ...styles.cardSection, marginTop: '20px' }}>
@@ -974,19 +1019,21 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                             <Eye size={13} style={{ marginRight: '4px' }} />
                             Preview
                           </button>
-                          <button
-                            onClick={() => handleRemoveContext(item.id)}
-                            style={styles.deleteIconBtn}
-                            title="Remove Context"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {!isViewer && (
+                            <button
+                              onClick={() => handleRemoveContext(item.id)}
+                              style={styles.deleteIconBtn}
+                              title="Remove Context"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p style={styles.emptyText}>No context items stored in this workspace. Upload a file or add manual text above.</p>
+                  <p style={styles.emptyText}>No context items stored in this workspace.</p>
                 )}
               </div>
 
@@ -1000,77 +1047,85 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                 Define programmatic policy engine constraints. Evaluated before tool execution. Higher priority policies take precedence. Ties default to ESCALATE.
               </p>
 
-              {/* Add Policy Form */}
-              <div style={{ ...styles.cardSection, marginTop: '16px' }}>
-                <h4 style={styles.sectionTitle}>Create Policy Rule</h4>
-                <form onSubmit={handleAddPolicy} style={{ marginTop: '12px' }}>
-                  <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                    <input
-                      type="text"
-                      value={newPolicyName}
-                      onChange={(e) => setNewPolicyName(e.target.value)}
-                      placeholder="Policy Name (e.g. Reject CS Bookings)"
-                      style={{ ...styles.textInput, flex: 2, minWidth: '200px' }}
-                      required
-                    />
-                    <select
-                      value={newPolicyEffect}
-                      onChange={(e) => setNewPolicyEffect(e.target.value)}
-                      style={{ ...styles.selectInput, flex: 1, minWidth: '150px' }}
-                    >
-                      <option value="ALLOW">ALLOW</option>
-                      <option value="DENY">DENY</option>
-                      <option value="REQUIRES_APPROVAL">REQUIRES_APPROVAL</option>
-                      <option value="ESCALATE">ESCALATE</option>
-                    </select>
-                    <input
-                      type="number"
-                      value={newPolicyPriority}
-                      onChange={(e) => setNewPolicyPriority(e.target.value)}
-                      placeholder="Priority"
-                      style={{ ...styles.textInput, flex: 0.5, minWidth: '80px' }}
-                      min="1"
-                    />
-                  </div>
+              {/* Add Policy Form (Admins/Owners only) */}
+              {isOwnerOrAdmin ? (
+                <div style={{ ...styles.cardSection, marginTop: '16px' }}>
+                  <h4 style={styles.sectionTitle}>Create Policy Rule</h4>
+                  <form onSubmit={handleAddPolicy} style={{ marginTop: '12px' }}>
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        value={newPolicyName}
+                        onChange={(e) => setNewPolicyName(e.target.value)}
+                        placeholder="Policy Name (e.g. Reject CS Bookings)"
+                        style={{ ...styles.textInput, flex: 2, minWidth: '200px' }}
+                        required
+                      />
+                      <select
+                        value={newPolicyEffect}
+                        onChange={(e) => setNewPolicyEffect(e.target.value)}
+                        style={{ ...styles.selectInput, flex: 1, minWidth: '150px' }}
+                      >
+                        <option value="ALLOW">ALLOW</option>
+                        <option value="DENY">DENY</option>
+                        <option value="REQUIRES_APPROVAL">REQUIRES_APPROVAL</option>
+                        <option value="ESCALATE">ESCALATE</option>
+                      </select>
+                      <input
+                        type="number"
+                        value={newPolicyPriority}
+                        onChange={(e) => setNewPolicyPriority(e.target.value)}
+                        placeholder="Priority"
+                        style={{ ...styles.textInput, flex: 0.5, minWidth: '80px' }}
+                        min="1"
+                      />
+                    </div>
 
-                  <div style={{ marginBottom: '10px' }}>
-                    <input
-                      type="text"
-                      value={newPolicyDesc}
-                      onChange={(e) => setNewPolicyDesc(e.target.value)}
-                      placeholder="Brief Description (e.g. Deny CS lab access to general users)"
-                      style={{ ...styles.textInput, width: '100%' }}
-                    />
-                  </div>
+                    <div style={{ marginBottom: '10px' }}>
+                      <input
+                        type="text"
+                        value={newPolicyDesc}
+                        onChange={(e) => setNewPolicyDesc(e.target.value)}
+                        placeholder="Brief Description (e.g. Deny CS lab access to general users)"
+                        style={{ ...styles.textInput, width: '100%' }}
+                      />
+                    </div>
 
-                  <div style={{ marginBottom: '10px' }}>
-                    <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-                      Rules Constraint (JSON Object):
-                    </label>
-                    <textarea
-                      value={newPolicyRules}
-                      onChange={(e) => setNewPolicyRules(e.target.value)}
-                      rows={3}
-                      style={{ ...styles.textareaInput, fontFamily: 'monospace', fontSize: '11px' }}
-                    />
-                  </div>
+                    <div style={{ marginBottom: '10px' }}>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                        Rules Constraint (JSON Object):
+                      </label>
+                      <textarea
+                        value={newPolicyRules}
+                        onChange={(e) => setNewPolicyRules(e.target.value)}
+                        rows={3}
+                        style={{ ...styles.textareaInput, fontFamily: 'monospace', fontSize: '11px' }}
+                      />
+                    </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <button
-                      type="submit"
-                      disabled={policyAdding}
-                      style={{
-                        ...styles.primaryActionBtn,
-                        opacity: policyAdding ? 0.45 : 1,
-                        cursor: policyAdding ? 'not-allowed' : 'pointer'
-                      }}
-                    >
-                      <Plus size={13} style={{ marginRight: '6px' }} />
-                      {policyAdding ? 'Creating...' : 'Create Policy'}
-                    </button>
-                  </div>
-                </form>
-              </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        type="submit"
+                        disabled={policyAdding}
+                        style={{
+                          ...styles.primaryActionBtn,
+                          opacity: policyAdding ? 0.45 : 1,
+                          cursor: policyAdding ? 'not-allowed' : 'pointer'
+                        }}
+                      >
+                        <Plus size={13} style={{ marginRight: '6px' }} />
+                        {policyAdding ? 'Creating...' : 'Create Policy'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              ) : (
+                <div style={{ padding: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 'var(--radius-sm)', marginTop: '16px' }}>
+                  <p style={{ margin: 0, fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                    🔒 Policy authoring and deletion require <strong>ADMIN</strong> or <strong>OWNER</strong> role.
+                  </p>
+                </div>
+              )}
 
               {/* Policies List */}
               <div style={{ ...styles.cardSection, marginTop: '20px' }}>
@@ -1133,13 +1188,15 @@ export default function WorkspaceSettingsModal({ workspace, isOpen, onClose, onW
                               {JSON.stringify(p.rules, null, 2)}
                             </pre>
                           </div>
-                          <button
-                            onClick={() => handleDeletePolicy(p.id)}
-                            style={styles.deleteIconBtn}
-                            title="Delete Policy"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {isOwnerOrAdmin && (
+                            <button
+                              onClick={() => handleDeletePolicy(p.id)}
+                              style={styles.deleteIconBtn}
+                              title="Delete Policy"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       );
                     })}

@@ -12,7 +12,10 @@ from .serializers import (
     WorkspaceSerializer, WorkspaceMembershipSerializer,
     WorkspaceSkillSerializer, WorkspaceContextItemSerializer, UserSerializer
 )
-from .permissions import IsWorkspaceOwner, IsWorkspaceMember, IsAuthenticatedOr401
+from .permissions import (
+    IsWorkspaceOwner, IsWorkspaceMember, IsAuthenticatedOr401,
+    IsWorkspaceAdminOrOwner, IsWorkspaceWriter
+)
 
 class WorkspaceViewSet(viewsets.ModelViewSet):
     queryset = Workspace.objects.all()
@@ -101,12 +104,14 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         # Determine permission based on action
         if self.action in [
             'retrieve', 'workspace_settings', 'dm',
-            'skills', 'context', 'context_summary', 'remove_context'
+            'skills', 'context', 'context_summary', 'remove_context', 'members'
         ]:
             return [IsAuthenticatedOr401(), IsWorkspaceMember()]
+        elif self.action in ['remove_skill']:
+            return [IsAuthenticatedOr401(), IsWorkspaceAdminOrOwner()]
         elif self.action in [
             'update', 'partial_update', 'destroy', 'archive', 'restore',
-            'list_members', 'add_member', 'remove_member', 'remove_skill'
+            'member_detail'
         ]:
             return [IsAuthenticatedOr401(), IsWorkspaceOwner()]
         return [IsAuthenticatedOr401()]
@@ -175,20 +180,28 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['get'], url_path='members', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
-    def list_members(self, request, pk=None):
-        workspace = self.get_object()
-        memberships = workspace.memberships.all()
-        serializer = WorkspaceMembershipSerializer(memberships, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    @action(detail=True, methods=['get', 'post'], url_path='members', permission_classes=[IsAuthenticatedOr401, IsWorkspaceMember])
+    def members(self, request, pk=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
 
-    @action(detail=True, methods=['post'], url_path='members', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
-    def add_member(self, request, pk=None):
-        workspace = self.get_object()
+        if request.method == 'GET':
+            memberships = workspace.memberships.all()
+            serializer = WorkspaceMembershipSerializer(memberships, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        # POST: Add member (IsWorkspaceOwner check)
+        if workspace.owner != request.user:
+            return Response(
+                {"error": "Only the workspace owner can add members."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = WorkspaceMembershipSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data['user']
+        role = serializer.validated_data.get('role', WorkspaceMembership.ROLE_MEMBER)
 
         if user == workspace.owner:
             return Response(
@@ -205,18 +218,50 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         membership = WorkspaceMembership.objects.create(
             workspace=workspace,
             user=user,
-            role='MEMBER'
+            role=role
         )
 
         response_serializer = WorkspaceMembershipSerializer(membership)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
-    @action(detail=True, methods=['delete'], url_path='members/(?P<user_id>[^/.]+)', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
-    def remove_member(self, request, pk=None, user_id=None):
-        workspace = self.get_object()
+    @action(detail=True, methods=['patch', 'put', 'delete'], url_path=r'members/(?P<user_id>[^/.]+)', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
+    def member_detail(self, request, pk=None, user_id=None):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+
+        if str(workspace.owner.id) == str(user_id):
+            action_verb = "modify the role of" if request.method in ['PATCH', 'PUT'] else "remove"
+            return Response(
+                {"error": f"Cannot {action_verb} the workspace owner."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         membership = get_object_or_404(WorkspaceMembership, workspace=workspace, user_id=user_id)
-        membership.delete()
-        return Response({"success": True, "message": "Member removed successfully."}, status=status.HTTP_200_OK)
+
+        if request.method == 'DELETE':
+            membership.delete()
+            return Response({"success": True, "message": "Member removed successfully."}, status=status.HTTP_200_OK)
+
+        # PATCH / PUT: Update role
+        role = request.data.get('role')
+        if not role:
+            return Response(
+                {"error": "Role is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        valid_roles = [choice[0] for choice in WorkspaceMembership.ROLE_CHOICES]
+        if role not in valid_roles:
+            return Response(
+                {"error": f"Invalid role: '{role}'. Valid roles are: {', '.join(valid_roles)}."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        membership.role = role
+        membership.save()
+
+        response_serializer = WorkspaceMembershipSerializer(membership)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'], url_path='ai-providers', permission_classes=[IsAuthenticatedOr401])
     def ai_providers(self, request):
@@ -265,6 +310,14 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                 "policy_engine_enabled": workspace.policy_engine_enabled,
                 "workflow_execution_enabled": workspace.workflow_execution_enabled,
             }, status=status.HTTP_200_OK)
+
+        # PUT/PATCH: Only ADMIN or OWNER can update workspace settings
+        is_admin_or_owner = workspace.owner == request.user or workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+        if not is_admin_or_owner:
+            return Response(
+                {"error": "Permission Denied: Only workspace ADMIN or OWNER can modify workspace settings."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         ai_provider = request.data.get("ai_provider")
         ai_model = request.data.get("ai_model")
@@ -408,25 +461,21 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             from task.models import UserProviderCredential
             from task.utils.encryption import decrypt_value
             try:
-                cred = UserProviderCredential.objects.get(user=request.user, provider=provider_name.lower())
+                cred = UserProviderCredential.objects.get(user=request.user, provider=provider_name)
                 resolved_key = decrypt_value(cred.encrypted_api_key)
             except UserProviderCredential.DoesNotExist:
-                pass
-
-            if not resolved_key:
                 return Response(
-                    {"error": "Configure this provider under Settings → AI Providers."},
+                    {"error": f"API key for '{provider_name}' is not configured. Please add it in Provider Settings."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            except Exception:
+                return Response(
+                    {"error": "Failed to decrypt provider API key."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
-        from .services.context_service import ContextService
-        try:
-            instructions_res = ContextService.get_workspace_instructions(workspace.id, request.user.id)
-            system_instruction = (
-                "You are an AI assistant in Surge Suite.\n"
-                + instructions_res.get("formatted_instruction_block", "")
-            )
-        except Exception:
+        system_instruction = workspace.system_prompt
+        if not system_instruction or not system_instruction.strip():
             system_instruction = "You are an AI assistant in Surge Suite."
 
         try:
@@ -490,10 +539,11 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             serializer = WorkspaceSkillSerializer(skills_qs, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
-        # POST: Create or upload skill (Owner only)
-        if workspace.owner != request.user:
+        # POST: Create or upload skill (Admin or Owner only)
+        is_admin_or_owner = workspace.owner == request.user or workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+        if not is_admin_or_owner:
             return Response(
-                {"error": "Only the workspace owner can create or upload skills."},
+                {"error": "Permission Denied: Only workspace ADMIN or OWNER can create or upload skills."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -557,7 +607,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         serializer = WorkspaceSkillSerializer(skill)
         return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
-    @action(detail=True, methods=['delete'], url_path=r'skills/(?P<skill_id>[^/.]+)', permission_classes=[IsAuthenticatedOr401, IsWorkspaceOwner])
+    @action(detail=True, methods=['delete'], url_path=r'skills/(?P<skill_id>[^/.]+)', permission_classes=[IsAuthenticatedOr401, IsWorkspaceAdminOrOwner])
     def remove_skill(self, request, pk=None, skill_id=None):
         workspace = get_object_or_404(Workspace, pk=pk)
         self.check_object_permissions(request, workspace)
@@ -584,7 +634,14 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             serializer = WorkspaceContextItemSerializer(items, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
-        # POST: Create manual text context or upload document
+        # POST: Create manual text context or upload document (Viewer blocked)
+        is_viewer = workspace.owner != request.user and workspace.memberships.filter(user=request.user, role='VIEWER').exists()
+        if is_viewer:
+            return Response(
+                {"error": "Permission Denied: Read-only VIEWER role cannot upload or add context items."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         uploaded_file = request.FILES.get('file')
         if uploaded_file:
             from .services.context_extractor import ContextExtractor, ContextExtractionError
@@ -671,6 +728,17 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         self.check_object_permissions(request, workspace)
 
         item = get_object_or_404(WorkspaceContextItem, workspace=workspace, id=context_id)
+
+        # Check permissions: item creator, workspace ADMIN, or OWNER (VIEWER blocked)
+        is_creator = item.creator == request.user
+        is_admin_or_owner = workspace.owner == request.user or workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+        is_viewer = workspace.owner != request.user and workspace.memberships.filter(user=request.user, role='VIEWER').exists()
+        if is_viewer or (not is_creator and not is_admin_or_owner):
+            return Response(
+                {"error": "Permission Denied: Only the creator, workspace ADMIN, or OWNER can delete this context item."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Soft delete / archive
         item.is_active = False
         item.is_archived = True
@@ -689,4 +757,3 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             "context": context_data,
             "instructions": instructions_data,
         }, status=status.HTTP_200_OK)
-

@@ -80,11 +80,17 @@ class WorkspaceSerializer(serializers.ModelSerializer):
 class WorkspaceMembershipSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     user_id = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.all(), source='user', write_only=True
+        queryset=User.objects.all(), source='user', write_only=True, required=False
+    )
+    role = serializers.ChoiceField(
+        choices=WorkspaceMembership.ROLE_CHOICES,
+        default=WorkspaceMembership.ROLE_MEMBER,
+        required=False
     )
 
     class Meta:
         model = WorkspaceMembership
         fields = ['id', 'user', 'user_id', 'role', 'created_at']
-        read_only_fields = ['id', 'role', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
 

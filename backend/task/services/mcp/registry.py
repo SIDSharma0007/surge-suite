@@ -2,12 +2,70 @@ import json
 from .client import MCPClient
 from .config import MCP_SERVER_CONFIGS
 
+ROLE_HIERARCHY = {
+    "VIEWER": 1,
+    "MEMBER": 2,
+    "ADMIN": 3,
+    "OWNER": 4,
+}
+
+TOOL_MINIMUM_ROLES = {
+    # Administrative & Highly Sensitive Tools -> ADMIN or OWNER
+    "maintenance_tickets.close_maintenance_ticket": "ADMIN",
+    "grievance_escalation.escalate_grievance": "ADMIN",
+    "filesystem.write_file": "ADMIN",
+    "builtin.database.query": "ADMIN",
+    "bash.execute": "ADMIN",
+
+    # Mutating / Creation Tools -> MEMBER or higher (blocks VIEWER)
+    "certificate_requests.create_certificate_request": "MEMBER",
+    "certificate_requests.cancel_certificate_request": "MEMBER",
+    "grievance_escalation.create_grievance": "MEMBER",
+    "grievance_escalation.update_grievance": "MEMBER",
+    "maintenance_tickets.create_maintenance_ticket": "MEMBER",
+    "maintenance_tickets.update_maintenance_ticket": "MEMBER",
+    "laboratory_bookings.create_lab_booking": "MEMBER",
+    "laboratory_bookings.cancel_lab_booking": "MEMBER",
+
+    # Read-Only Inspection Tools -> Open to all members including VIEWER
+    "certificate_requests.list_certificate_requests": "VIEWER",
+    "certificate_requests.get_certificate_request": "VIEWER",
+    "certificate_requests.get_certificate_status": "VIEWER",
+    "grievance_escalation.list_grievances": "VIEWER",
+    "grievance_escalation.get_grievance": "VIEWER",
+    "grievance_escalation.get_grievance_status": "VIEWER",
+    "maintenance_tickets.list_maintenance_tickets": "VIEWER",
+    "maintenance_tickets.get_maintenance_ticket": "VIEWER",
+    "maintenance_tickets.get_ticket_status": "VIEWER",
+    "laboratory_bookings.list_laboratories": "VIEWER",
+    "laboratory_bookings.get_lab_availability": "VIEWER",
+    "laboratory_bookings.get_lab_booking": "VIEWER",
+    "laboratory_bookings.list_user_bookings": "VIEWER",
+    "filesystem.read_file": "VIEWER",
+    "filesystem.list_directory": "VIEWER",
+    "search.search_documents": "VIEWER",
+}
+
 class MCPRegistry:
     def __init__(self, user=None, workspace=None):
         self.user = user
         self.workspace = workspace
         self.clients = {}
         self.tools = {} # Maps prefixed_name -> (client, tool_info)
+
+    def _resolve_user_role(self, user=None, workspace=None) -> str:
+        u = user or self.user
+        w = workspace or self.workspace
+        if not u and not w:
+            return "ADMIN"
+        if not u or not w:
+            return "ANONYMOUS"
+        if w.owner == u:
+            return "OWNER"
+        membership = w.memberships.filter(user=u).first()
+        if membership:
+            return membership.role
+        return "ANONYMOUS"
 
     def initialize_servers(self, server_names=None, user=None):
         import os
@@ -20,6 +78,9 @@ class MCPRegistry:
             base_env["SURGE_USER_ID"] = str(resolved_user.id)
         if resolved_workspace:
             base_env["SURGE_WORKSPACE_ID"] = str(resolved_workspace.id)
+
+        user_role = self._resolve_user_role(resolved_user, resolved_workspace)
+        base_env["SURGE_USER_ROLE"] = user_role
 
         import sys
         backend_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -135,50 +196,72 @@ class MCPRegistry:
         if prefixed_name not in self.tools:
             return {"error": f"Tool '{prefixed_name}' not found in MCP registry."}
 
-        # Check for missing parameters
+        # 1. Check Role-Based Access Control (RBAC)
+        user_role = self._resolve_user_role(self.user, self.workspace)
+        min_required_role = TOOL_MINIMUM_ROLES.get(prefixed_name)
+        if not min_required_role:
+            base_tool_name = prefixed_name.split(".")[-1]
+            if any(base_tool_name.startswith(verb) for verb in ["close_", "escalate_", "delete_", "destroy_", "drop_", "write_"]):
+                min_required_role = "ADMIN"
+            elif any(base_tool_name.startswith(verb) for verb in ["create_", "update_", "add_", "cancel_", "book_"]):
+                min_required_role = "MEMBER"
+            else:
+                min_required_role = "VIEWER"
+
+        user_level = ROLE_HIERARCHY.get(user_role, 0)
+        required_level = ROLE_HIERARCHY.get(min_required_role, 2)
+
+        if user_level < required_level:
+            return {
+                "error": f"Permission Denied: Users with role '{user_role}' are not authorized to execute '{prefixed_name}'. This action requires '{min_required_role}' or higher privilege."
+            }
+
+        # 2. Check for missing parameters
         from task.services.uncertainty_detector import UncertaintyDetector
         missing = UncertaintyDetector.check_missing_info(prefixed_name, arguments)
         if missing:
             return {"error": f"Missing required parameters: {', '.join(missing)}. Please ask the user to clarify."}
 
-        # Check Policy Engine
+        # 3. Check Policy Engine
+        policy_effect = None
         if self.user and self.workspace:
             from task.services.policy_engine import PolicyEngine
-            effect = PolicyEngine.evaluate(
+            policy_effect = PolicyEngine.evaluate(
                 workspace=self.workspace,
                 user=self.user,
                 action_type=prefixed_name,
                 resource_data=arguments
             )
-            if effect == "DENY":
+            if policy_effect == "DENY":
                 return {"error": f"Denied by institutional policy: Action '{prefixed_name}' is not allowed."}
-            elif effect == "ESCALATE":
+            elif policy_effect == "ESCALATE":
                 return {"error": f"Escalated: Action '{prefixed_name}' was escalated by policy engine due to conflicts or safety rules."}
-            elif effect == "REQUIRES_APPROVAL":
+            elif policy_effect == "REQUIRES_APPROVAL":
                 if not approved:
                     from task.services.capability_registry import ApprovalRequiredException
                     cmd_str = f"mcp:{prefixed_name}({json.dumps(arguments)})"
                     reason = f"Execution of the MCP tool '{prefixed_name}' requires human authorization based on institutional policies."
                     raise ApprovalRequiredException(command=cmd_str, reason=reason, risk="HIGH")
-        else:
-            if not approved:
-                tools_requiring_approval = {
-                    "certificate_requests.create_certificate_request",
-                    "certificate_requests.cancel_certificate_request",
-                    "maintenance_tickets.create_maintenance_ticket",
-                    "maintenance_tickets.update_maintenance_ticket",
-                    "maintenance_tickets.close_maintenance_ticket",
-                    "laboratory_bookings.create_lab_booking",
-                    "laboratory_bookings.cancel_lab_booking",
-                    "grievance_escalation.create_grievance",
-                    "grievance_escalation.update_grievance",
-                    "grievance_escalation.escalate_grievance",
-                }
-                if prefixed_name in tools_requiring_approval:
-                    from task.services.capability_registry import ApprovalRequiredException
-                    cmd_str = f"mcp:{prefixed_name}({json.dumps(arguments)})"
-                    reason = f"Execution of the MCP tool '{prefixed_name}' requires human authorization."
-                    raise ApprovalRequiredException(command=cmd_str, reason=reason, risk="HIGH")
+
+        # 4. Default approval enforcement for mutating institutional tools if not explicitly approved
+        if not approved and policy_effect != "ALLOW":
+            tools_requiring_approval = {
+                "certificate_requests.create_certificate_request",
+                "certificate_requests.cancel_certificate_request",
+                "maintenance_tickets.create_maintenance_ticket",
+                "maintenance_tickets.update_maintenance_ticket",
+                "maintenance_tickets.close_maintenance_ticket",
+                "laboratory_bookings.create_lab_booking",
+                "laboratory_bookings.cancel_lab_booking",
+                "grievance_escalation.create_grievance",
+                "grievance_escalation.update_grievance",
+                "grievance_escalation.escalate_grievance",
+            }
+            if prefixed_name in tools_requiring_approval:
+                from task.services.capability_registry import ApprovalRequiredException
+                cmd_str = f"mcp:{prefixed_name}({json.dumps(arguments)})"
+                reason = f"Execution of the MCP tool '{prefixed_name}' requires human authorization."
+                raise ApprovalRequiredException(command=cmd_str, reason=reason, risk="HIGH")
 
         client, tool_info = self.tools[prefixed_name]
         try:

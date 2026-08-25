@@ -56,10 +56,20 @@ class PolicyEngine:
             if username_contains.lower() not in user.username.lower():
                 return False
 
-        # 3. Resource Data checks
+        # 3. Role constraints
+        roles = rules.get("roles") or rules.get("target_roles") or rules.get("applicable_roles")
+        if roles and isinstance(roles, list):
+            user_role = "OWNER" if policy.workspace.owner == user else (
+                policy.workspace.memberships.filter(user=user).values_list('role', flat=True).first() or "ANONYMOUS"
+            )
+            if user_role not in roles:
+                return False
+
+        # 4. Resource Data checks
         # Matches specific fields like lab_name, certificate_type, etc.
+        reserved_keys = {"target_resource", "username_contains", "roles", "target_roles", "applicable_roles", "allowed_roles", "denied_roles", "min_role"}
         for key, expected_val in rules.items():
-            if key in ["target_resource", "username_contains"]:
+            if key in reserved_keys:
                 continue
             if key in resource_data:
                 val = resource_data[key]

@@ -18,6 +18,7 @@ from task.models import MaintenanceTicket
 def main():
     user_id = os.environ.get("SURGE_USER_ID")
     workspace_id = os.environ.get("SURGE_WORKSPACE_ID")
+    user_role = os.environ.get("SURGE_USER_ROLE", "MEMBER")
 
     for line in sys.stdin:
         try:
@@ -87,7 +88,7 @@ def main():
                             },
                             {
                                 "name": "close_maintenance_ticket",
-                                "description": "Close a maintenance ticket with a closure reason.",
+                                "description": "Close a maintenance ticket with a closure reason (Admin/Owner only).",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -126,59 +127,77 @@ def main():
                         if not workspace.workflow_execution_enabled:
                             result = {"content": [{"type": "text", "text": "Error: Institutional workflow execution is disabled for this workspace."}], "isError": True}
                         elif tool_name == "create_maintenance_ticket":
-                            category = arguments.get("category")
-                            description = arguments.get("description")
-                            location = arguments.get("location")
-                            
-                            ticket = MaintenanceTicket.objects.create(
-                                workspace=workspace,
-                                user=user,
-                                category=category,
-                                description=description,
-                                location=location,
-                                status='OPEN'
-                            )
-                            text = f"Successfully created maintenance ticket.\nID: {ticket.id}\nCategory: {ticket.category}\nLocation: {ticket.location}\nStatus: {ticket.status}"
-                            result = {"content": [{"type": "text", "text": text}]}
-                        elif tool_name == "list_maintenance_tickets":
-                            tickets = MaintenanceTicket.objects.filter(workspace=workspace, user=user)
-                            if tickets.exists():
-                                lines = [f"- {t.id}: {t.category} at {t.location} [{t.status}]" for t in tickets]
-                                text = "Your maintenance tickets:\n" + "\n".join(lines)
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot create maintenance tickets."}], "isError": True}
                             else:
-                                text = "You have no maintenance tickets."
+                                category = arguments.get("category")
+                                description = arguments.get("description")
+                                location = arguments.get("location")
+                                
+                                ticket = MaintenanceTicket.objects.create(
+                                    workspace=workspace,
+                                    user=user,
+                                    category=category,
+                                    description=description,
+                                    location=location,
+                                    status='OPEN'
+                                )
+                                text = f"Successfully created maintenance ticket.\nID: {ticket.id}\nCategory: {ticket.category}\nLocation: {ticket.location}\nStatus: {ticket.status}"
+                                result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "list_maintenance_tickets":
+                            if user_role in ['ADMIN', 'OWNER']:
+                                tickets = MaintenanceTicket.objects.filter(workspace=workspace)
+                            else:
+                                tickets = MaintenanceTicket.objects.filter(workspace=workspace, user=user)
+                            if tickets.exists():
+                                lines = [f"- {t.id}: {t.category} at {t.location} [{t.status}] (by @{t.user.username})" for t in tickets]
+                                text = "Maintenance tickets:\n" + "\n".join(lines)
+                            else:
+                                text = "No maintenance tickets found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name in ["get_maintenance_ticket", "get_ticket_status"]:
                             ticket_id = arguments.get("ticket_id")
                             try:
-                                t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
+                                if user_role in ['ADMIN', 'OWNER']:
+                                    t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace)
+                                else:
+                                    t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
                                 text = f"Maintenance Ticket Details:\nID: {t.id}\nCategory: {t.category}\nDescription: {t.description}\nLocation: {t.location}\nStatus: {t.status}\nCreated: {t.created_at.isoformat()}"
                             except (MaintenanceTicket.DoesNotExist, ValueError):
                                 text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "update_maintenance_ticket":
-                            ticket_id = arguments.get("ticket_id")
-                            description = arguments.get("description")
-                            try:
-                                t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
-                                t.description = description
-                                t.save()
-                                text = f"Successfully updated maintenance ticket {t.id} description."
-                            except (MaintenanceTicket.DoesNotExist, ValueError):
-                                text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
-                            result = {"content": [{"type": "text", "text": text}]}
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot update maintenance tickets."}], "isError": True}
+                            else:
+                                ticket_id = arguments.get("ticket_id")
+                                description = arguments.get("description")
+                                try:
+                                    if user_role in ['ADMIN', 'OWNER']:
+                                        t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace)
+                                    else:
+                                        t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
+                                    t.description = description
+                                    t.save()
+                                    text = f"Successfully updated maintenance ticket {t.id} description."
+                                except (MaintenanceTicket.DoesNotExist, ValueError):
+                                    text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
+                                result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "close_maintenance_ticket":
-                            ticket_id = arguments.get("ticket_id")
-                            reason = arguments.get("reason", "")
-                            try:
-                                t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
-                                t.status = 'CLOSED'
-                                t.description += f"\n[Closure Reason: {reason}]"
-                                t.save()
-                                text = f"Successfully closed maintenance ticket {t.id}."
-                            except (MaintenanceTicket.DoesNotExist, ValueError):
-                                text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
-                            result = {"content": [{"type": "text", "text": text}]}
+                            if user_role not in ['ADMIN', 'OWNER']:
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Only ADMIN or OWNER can close maintenance tickets."}], "isError": True}
+                            else:
+                                ticket_id = arguments.get("ticket_id")
+                                reason = arguments.get("reason", "")
+                                try:
+                                    t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace)
+                                    t.status = 'CLOSED'
+                                    t.description += f"\n[Closure Reason: {reason}]"
+                                    t.save()
+                                    text = f"Successfully closed maintenance ticket {t.id}."
+                                except (MaintenanceTicket.DoesNotExist, ValueError):
+                                    text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
+                                result = {"content": [{"type": "text", "text": text}]}
                         else:
                             result = {"content": [{"type": "text", "text": f"Error: Unknown tool '{tool_name}'"}], "isError": True}
                     except Workspace.DoesNotExist:

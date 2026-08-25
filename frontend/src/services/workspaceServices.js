@@ -61,7 +61,7 @@ export const workspaceServices = {
   },
 
   /**
-   * List members of a workspace (owner only).
+   * List members of a workspace.
    */
   listMembers(id) {
     return api.get(`/workspaces/${id}/members/`);
@@ -72,6 +72,13 @@ export const workspaceServices = {
    */
   addMember(id, data) {
     return api.post(`/workspaces/${id}/members/`, data);
+  },
+
+  /**
+   * Update a member's role in the workspace (owner only).
+   */
+  updateMemberRole(id, userId, data) {
+    return api.patch(`/workspaces/${id}/members/${userId}/`, data);
   },
 
   /**

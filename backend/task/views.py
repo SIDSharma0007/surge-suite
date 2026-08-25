@@ -67,6 +67,14 @@ class TaskViewSet(viewsets.ModelViewSet):
         # Enforce workspace access check
         self.check_object_permissions(request, workspace)
 
+        # Reject VIEWER role from creating tasks
+        is_viewer = workspace.owner != request.user and workspace.memberships.filter(user=request.user, role='VIEWER').exists()
+        if is_viewer:
+            return Response(
+                {"error": "Permission Denied: Read-only VIEWER role cannot create tasks."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         task_service = TaskService()
         task = task_service.create_task(
             workspace=workspace,
@@ -99,6 +107,14 @@ class TaskViewSet(viewsets.ModelViewSet):
     def execute(self, request, pk=None):
         task = get_object_or_404(Task, id=pk)
         self.check_object_permissions(request, task)
+
+        # Reject VIEWER role from executing tasks
+        is_viewer = task.workspace.owner != request.user and task.workspace.memberships.filter(user=request.user, role='VIEWER').exists()
+        if is_viewer:
+            return Response(
+                {"error": "Permission Denied: Read-only VIEWER role cannot execute tasks."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         if task.status == 'RUNNING':
             return Response(
@@ -170,6 +186,18 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = get_object_or_404(Task, id=pk)
         self.check_object_permissions(request, task)
 
+        # Only task creator, workspace ADMIN, or OWNER can approve commands
+        is_authorized = (
+            request.user == task.creator
+            or task.workspace.owner == request.user
+            or task.workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+        )
+        if not is_authorized:
+            return Response(
+                {"error": "Permission Denied: Only the task creator, workspace ADMIN, or OWNER can authorize execution requests."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         if task.status != 'WAITING_FOR_APPROVAL':
             return Response(
                 {"error": f"Task is not waiting for approval (current status: {task.status})."},
@@ -220,6 +248,18 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         task = get_object_or_404(Task, id=pk)
         self.check_object_permissions(request, task)
+
+        # Only task creator, workspace ADMIN, or OWNER can deny commands
+        is_authorized = (
+            request.user == task.creator
+            or task.workspace.owner == request.user
+            or task.workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+        )
+        if not is_authorized:
+            return Response(
+                {"error": "Permission Denied: Only the task creator, workspace ADMIN, or OWNER can authorize execution requests."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         if task.status != 'WAITING_FOR_APPROVAL':
             return Response(
@@ -402,6 +442,10 @@ class CertificateRequestViewSet(viewsets.ReadOnlyModelViewSet):
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
             return CertificateRequest.objects.none()
+        
+        is_admin_or_owner = workspace.owner == self.request.user or workspace.memberships.filter(user=self.request.user, role='ADMIN').exists()
+        if is_admin_or_owner:
+            return CertificateRequest.objects.filter(workspace_id=workspace_id).order_by('-created_at')
         return CertificateRequest.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
 
 
@@ -426,6 +470,10 @@ class MaintenanceTicketViewSet(viewsets.ReadOnlyModelViewSet):
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
             return MaintenanceTicket.objects.none()
+        
+        is_admin_or_owner = workspace.owner == self.request.user or workspace.memberships.filter(user=self.request.user, role='ADMIN').exists()
+        if is_admin_or_owner:
+            return MaintenanceTicket.objects.filter(workspace_id=workspace_id).order_by('-created_at')
         return MaintenanceTicket.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
 
 
@@ -450,6 +498,10 @@ class LaboratoryBookingViewSet(viewsets.ReadOnlyModelViewSet):
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
             return LaboratoryBooking.objects.none()
+        
+        is_admin_or_owner = workspace.owner == self.request.user or workspace.memberships.filter(user=self.request.user, role='ADMIN').exists()
+        if is_admin_or_owner:
+            return LaboratoryBooking.objects.filter(workspace_id=workspace_id).order_by('-created_at')
         return LaboratoryBooking.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
 
 
@@ -474,6 +526,10 @@ class GrievanceEscalationViewSet(viewsets.ReadOnlyModelViewSet):
         workspace = get_object_or_404(Workspace, id=workspace_id)
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
             return GrievanceEscalation.objects.none()
+        
+        is_admin_or_owner = workspace.owner == self.request.user or workspace.memberships.filter(user=self.request.user, role='ADMIN').exists()
+        if is_admin_or_owner:
+            return GrievanceEscalation.objects.filter(workspace_id=workspace_id).order_by('-created_at')
         return GrievanceEscalation.objects.filter(workspace_id=workspace_id, user=self.request.user).order_by('-created_at')
 
 
@@ -503,9 +559,40 @@ class InstitutionalPolicyViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         workspace_id = self.request.data.get('workspace')
         from workspace.models import Workspace
-        workspace = get_object_or_404(Workspace, id=workspace_id)
+        from rest_framework.exceptions import ValidationError, PermissionDenied
+        try:
+            workspace = Workspace.objects.get(id=workspace_id)
+        except (Workspace.DoesNotExist, ValueError):
+            raise ValidationError("Workspace not found.")
+
         if workspace.owner != self.request.user and not workspace.memberships.filter(user=self.request.user).exists():
-            from rest_framework.exceptions import ValidationError
             raise ValidationError("You are not a member of this workspace.")
+
+        is_admin_or_owner = workspace.owner == self.request.user or workspace.memberships.filter(user=self.request.user, role='ADMIN').exists()
+        if not is_admin_or_owner:
+            raise PermissionDenied("Permission Denied: Only workspace ADMIN or OWNER can create institutional policies.")
         serializer.save(workspace_id=workspace_id)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        workspace = instance.workspace
+        is_admin_or_owner = workspace.owner == request.user or workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+        if not is_admin_or_owner:
+            return Response(
+                {"error": "Permission Denied: Only workspace ADMIN or OWNER can modify institutional policies."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        workspace = instance.workspace
+        is_admin_or_owner = workspace.owner == request.user or workspace.memberships.filter(user=request.user, role='ADMIN').exists()
+        if not is_admin_or_owner:
+            return Response(
+                {"error": "Permission Denied: Only workspace ADMIN or OWNER can delete institutional policies."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
+
 
