@@ -85,8 +85,13 @@ class OpenAICompatibleModelProvider(ModelProvider):
             return f"Error: Failed to connect to model provider. Detail: {str(e)}", "REAL"
 
 class FakeModelProvider(ModelProvider):
+    def __init__(self, mock_output: str = None):
+        self.mock_output = mock_output
+
     def generate(self, prompt: str, system_instruction: str = None, api_key: str = None, model: str = None) -> tuple[str, str]:
         # Deterministic simulation for tests and offline development
+        if self.mock_output is not None:
+            return self.mock_output, "SIMULATED"
         return f"[Simulated Response] Mode: SIMULATED. Prompt: {prompt}", "SIMULATED"
 
 def get_model_provider_for_agent(agent) -> tuple[ModelProvider, bool]:
@@ -106,7 +111,7 @@ def get_model_provider_for_agent(agent) -> tuple[ModelProvider, bool]:
         return OpenAICompatibleModelProvider(base_url, default_model), True
     elif provider_id == "nvidia_nim":
         base_url = getattr(settings, "NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
-        default_model = getattr(settings, "NVIDIA_NIM_DEFAULT_MODEL", "meta/llama-3.1-8b-instruct")
+        default_model = getattr(settings, "NVIDIA_NIM_DEFAULT_MODEL", "meta/llama-3.2-11b-vision-instruct")
         return OpenAICompatibleModelProvider(base_url, default_model), True
     elif provider_id == "openclaw":
         base_url = getattr(settings, "OPENCLAW_BASE_URL", "http://localhost:8000/v1")
@@ -136,7 +141,7 @@ def get_model_provider_by_name(provider_name: str) -> tuple[ModelProvider, bool]
         return OpenAICompatibleModelProvider(base_url, default_model), True
     elif provider_id == "nvidia_nim":
         base_url = getattr(settings, "NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
-        default_model = getattr(settings, "NVIDIA_NIM_DEFAULT_MODEL", "meta/llama-3.1-8b-instruct")
+        default_model = getattr(settings, "NVIDIA_NIM_DEFAULT_MODEL", "meta/llama-3.2-11b-vision-instruct")
         return OpenAICompatibleModelProvider(base_url, default_model), True
     elif provider_id == "openclaw":
         base_url = getattr(settings, "OPENCLAW_BASE_URL", "http://localhost:8000/v1")

@@ -3,7 +3,7 @@ import { settingsServices } from '../services/settingsServices';
 import { workspaceServices } from '../services/workspaceServices';
 import { Eye, EyeOff, Save, Trash2, CheckCircle, AlertCircle, Cpu, Sliders, Plus, Edit2, Play, Square, Settings, RefreshCw } from 'lucide-react';
 
-export default function SettingsTab({ activeWorkspaceId, onWorkspaceUpdated }) {
+export default function SettingsTab({ activeWorkspaceId, userRole = 'OWNER', isOwnerOrAdmin = true, onWorkspaceUpdated }) {
   // Provider registry state from backend
   const [registry, setRegistry] = useState({});
   
@@ -453,14 +453,36 @@ export default function SettingsTab({ activeWorkspaceId, onWorkspaceUpdated }) {
               <p style={styles.loadingText}>Loading workspace AI configuration...</p>
             ) : (
               <div style={styles.workspaceConfigForm}>
+                {!isOwnerOrAdmin && (
+                  <div style={{
+                    padding: '10px 14px',
+                    background: 'rgba(100, 116, 139, 0.08)',
+                    border: '1px solid var(--border-medium)',
+                    borderRadius: '8px',
+                    color: 'var(--text-secondary)',
+                    fontSize: '12.5px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    marginBottom: '16px',
+                  }}>
+                    <AlertCircle size={15} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                    <span>🔒 <strong>Read-Only Mode:</strong> AI Provider and Model configurations for this workspace are managed by the Workspace Admin or Owner.</span>
+                  </div>
+                )}
+
                 <div style={styles.formRow}>
                   <div style={styles.formGroup}>
                     <label style={styles.formLabel}>AI Provider</label>
                     <select
                       value={selectedProvider}
                       onChange={(e) => handleProviderChange(e.target.value)}
-                      style={styles.selectDropdown}
-                      disabled={workspaceSaving}
+                      style={{
+                        ...styles.selectDropdown,
+                        opacity: !isOwnerOrAdmin ? 0.6 : 1,
+                        cursor: !isOwnerOrAdmin ? 'not-allowed' : 'pointer',
+                      }}
+                      disabled={!isOwnerOrAdmin || workspaceSaving}
                     >
                       {Object.keys(registry).map(provId => (
                         <option key={provId} value={provId}>
@@ -475,8 +497,12 @@ export default function SettingsTab({ activeWorkspaceId, onWorkspaceUpdated }) {
                     <select
                       value={selectedModel}
                       onChange={(e) => setSelectedModel(e.target.value)}
-                      style={styles.selectDropdown}
-                      disabled={workspaceSaving}
+                      style={{
+                        ...styles.selectDropdown,
+                        opacity: !isOwnerOrAdmin ? 0.6 : 1,
+                        cursor: !isOwnerOrAdmin ? 'not-allowed' : 'pointer',
+                      }}
+                      disabled={!isOwnerOrAdmin || workspaceSaving}
                     >
                       {(registry[selectedProvider]?.models || []).map(modelId => (
                         <option key={modelId} value={modelId}>
@@ -487,15 +513,17 @@ export default function SettingsTab({ activeWorkspaceId, onWorkspaceUpdated }) {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleSaveWorkspaceSettings}
-                  style={{ ...styles.btn, ...styles.btnSave, marginTop: '8px', alignSelf: 'flex-start' }}
-                  disabled={workspaceSaving}
-                >
-                  <Save size={14} style={{ marginRight: '6px' }} />
-                  {workspaceSaving ? 'Saving...' : 'Save Workspace Settings'}
-                </button>
+                {isOwnerOrAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleSaveWorkspaceSettings}
+                    style={{ ...styles.btn, ...styles.btnSave, marginTop: '8px', alignSelf: 'flex-start' }}
+                    disabled={workspaceSaving}
+                  >
+                    <Save size={14} style={{ marginRight: '6px' }} />
+                    {workspaceSaving ? 'Saving...' : 'Save Workspace Settings'}
+                  </button>
+                )}
               </div>
             )}
           </section>
@@ -507,8 +535,26 @@ export default function SettingsTab({ activeWorkspaceId, onWorkspaceUpdated }) {
               <h2 style={styles.sectionBlockTitle}>AI Provider Credentials</h2>
             </div>
             <p style={styles.sectionBlockSubtitle}>
-              Configure your personal API credentials. Keys are encrypted symmetrically and never leaked.
+              Configure organizational AI credentials. Keys are encrypted symmetrically and never leaked.
             </p>
+
+            {!isOwnerOrAdmin && (
+              <div style={{
+                padding: '12px 16px',
+                background: 'rgba(100, 116, 139, 0.08)',
+                border: '1px solid var(--border-medium)',
+                borderRadius: '8px',
+                color: 'var(--text-secondary)',
+                fontSize: '12.5px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '16px',
+              }}>
+                <AlertCircle size={16} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                <span>🔒 <strong>API Key Management Restricted:</strong> Only Workspace Owners and Admins can add or update provider API keys. As a Member/Viewer, your AI tasks automatically utilize the Workspace Owner's configured credentials.</span>
+              </div>
+            )}
 
             <div style={styles.grid}>
               {providers.map(p => {
@@ -546,53 +592,71 @@ export default function SettingsTab({ activeWorkspaceId, onWorkspaceUpdated }) {
                         </div>
                       )}
 
-                      <div style={styles.inputGroup}>
-                        <label style={styles.inputLabel}>
-                          {isConfigured ? 'Replace API Key' : 'Enter API Key'}
-                        </label>
-                        <div style={styles.inputWrapper}>
-                          <input
-                            type={visibility[p.provider] ? 'text' : 'password'}
-                            value={inputs[p.provider] || ''}
-                            onChange={(e) => handleInputChange(p.provider, e.target.value)}
-                            placeholder={isConfigured ? 'Enter new key to replace existing' : 'Enter API Key'}
-                            style={styles.keyInput}
-                            disabled={isActionLoading}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => toggleVisibility(p.provider)}
-                            style={styles.visibleBtn}
-                            disabled={isActionLoading}
-                          >
-                            {visibility[p.provider] ? <EyeOff size={16} /> : <Eye size={16} />}
-                          </button>
+                      {isOwnerOrAdmin ? (
+                        <>
+                          <div style={styles.inputGroup}>
+                            <label style={styles.inputLabel}>
+                              {isConfigured ? 'Replace API Key' : 'Enter API Key'}
+                            </label>
+                            <div style={styles.inputWrapper}>
+                              <input
+                                type={visibility[p.provider] ? 'text' : 'password'}
+                                value={inputs[p.provider] || ''}
+                                onChange={(e) => handleInputChange(p.provider, e.target.value)}
+                                placeholder={isConfigured ? 'Enter new key to replace existing' : 'Enter API Key'}
+                                style={styles.keyInput}
+                                disabled={isActionLoading}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => toggleVisibility(p.provider)}
+                                style={styles.visibleBtn}
+                                disabled={isActionLoading}
+                              >
+                                {visibility[p.provider] ? <EyeOff size={16} /> : <Eye size={16} />}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div style={styles.actionsWrap}>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveKey(p.provider)}
+                              style={{ ...styles.btn, ...styles.btnSave }}
+                              disabled={isActionLoading || !inputs[p.provider]}
+                            >
+                              <Save size={14} style={{ marginRight: '6px' }} />
+                              {isConfigured ? 'Update Key' : 'Save Key'}
+                            </button>
+
+                            {isConfigured && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveKey(p.provider)}
+                                style={{ ...styles.btn, ...styles.btnRemove }}
+                                disabled={isActionLoading}
+                              >
+                                <Trash2 size={14} style={{ marginRight: '6px' }} />
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div style={{
+                          padding: '10px 12px',
+                          background: 'var(--bg-secondary)',
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          color: 'var(--text-muted)',
+                          fontStyle: 'italic',
+                        }}>
+                          {isConfigured 
+                            ? "✓ Inherited from Workspace Owner credentials." 
+                            : "No API key configured for this provider."}
                         </div>
-                      </div>
-
-                      <div style={styles.actionsWrap}>
-                        <button
-                          type="button"
-                          onClick={() => handleSaveKey(p.provider)}
-                          style={{ ...styles.btn, ...styles.btnSave }}
-                          disabled={isActionLoading || !inputs[p.provider]}
-                        >
-                          <Save size={14} style={{ marginRight: '6px' }} />
-                          {isConfigured ? 'Update Key' : 'Save Key'}
-                        </button>
-
-                        {isConfigured && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveKey(p.provider)}
-                            style={{ ...styles.btn, ...styles.btnRemove }}
-                            disabled={isActionLoading}
-                          >
-                            <Trash2 size={14} style={{ marginRight: '6px' }} />
-                            Remove
-                          </button>
-                        )}
-                      </div>
+                      )}
                     </div>
                   </div>
                 );

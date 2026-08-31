@@ -166,6 +166,20 @@ class ExecutionService:
                 if re.search(pattern, statement_lower):
                     return True
 
+        # Check for explicit institutional request / booking / ticket / grievance intents
+        has_request_tool = any(any(k in t.get("name", "").lower() for k in ["certificate", "maintenance", "laborator", "grievance", "requests"]) for t in available_tools_info)
+        if has_request_tool:
+            request_intents = [
+                r"\b(certificate|cert|bonafide|migration|character certificate|transfer certificate)\b",
+                r"\b(maintenance|repair|leak|broken|fix|ticket|plumbing|electrical|hvac)\b",
+                r"\b(book|booking|slot|laboratory|lab)\b",
+                r"\b(grievance|complaint|escalate|escalation)\b",
+                r"\b(submit request|create request|my request|request details)\b",
+            ]
+            for pattern in request_intents:
+                if re.search(pattern, statement_lower):
+                    return True
+
         return False
 
     def _extract_and_validate_tool_call(self, output: str, registered_tools: dict) -> tuple[dict | None, str | None, bool]:
@@ -253,7 +267,11 @@ class ExecutionService:
                 tool_name = tool_name.strip()
 
                 if tool_name not in registered_tools:
-                    return None, f"Tool '{tool_name}' is not registered in available tools.", True
+                    matching_tools = [k for k in registered_tools if k == tool_name or k.endswith(f".{tool_name}") or registered_tools[k].get("original_name") == tool_name]
+                    if len(matching_tools) == 1:
+                        tool_name = matching_tools[0]
+                    else:
+                        return None, f"Tool '{tool_name}' is not registered in available tools.", True
 
                 if not isinstance(tool_args, dict):
                     return None, f"Tool '{tool_name}' arguments must be a JSON object/dictionary.", True
@@ -515,7 +533,12 @@ class ExecutionService:
                     cred = UserProviderCredential.objects.get(user=target_user, provider=provider_name.lower())
                     resolved_key = decrypt_value(cred.encrypted_api_key)
                 except UserProviderCredential.DoesNotExist:
-                    resolved_key = None
+                    # Fallback to workspace owner's configured provider key
+                    try:
+                        cred = UserProviderCredential.objects.get(user=task.workspace.owner, provider=provider_name.lower())
+                        resolved_key = decrypt_value(cred.encrypted_api_key)
+                    except (UserProviderCredential.DoesNotExist, AttributeError):
+                        resolved_key = None
                     
                 if not resolved_key:
                     # Key is missing!
@@ -529,14 +552,14 @@ class ExecutionService:
                         mode='REAL',
                         provider=provider_name,
                         model=model_name,
-                        error=f"Configure this provider under Settings → AI Providers."
+                        error=f"Configure this provider under Settings -> AI Providers."
                     )
                     
                     ExecutionEvent.objects.create(
                         task=task,
                         execution=execution,
                         event_type='EXECUTION_FAILED',
-                        metadata=sanitize_data({'error': f"Configure this provider under Settings → AI Providers."})
+                        metadata=sanitize_data({'error': f"Configure this provider under Settings -> AI Providers."})
                     )
                     return execution
             else:
@@ -696,7 +719,12 @@ class ExecutionService:
             "- You MUST base all answers about institutional policies, deadlines, fees, rules, and procedures SOLELY on this evidence.\n"
             "- If the evidence is marked as CONFLICTING, do NOT choose or assume; state the conflict clearly to the user and ask for clarification, or escalate.\n"
             "- If the status is INSUFFICIENT_EVIDENCE or UNVERIFIED (i.e. no relevant chunks are found), explicitly state that the claim could not be verified from institutional sources. Do NOT guess or make up policies.\n"
-            "- Always cite the source document name in your answer when referencing institutional facts.\n"
+            "- Always cite the source document name in your answer when referencing institutional facts.\n\n"
+            "HUMAN-IN-THE-LOOP & INSTITUTIONAL REQUEST WORKFLOW RULES:\n"
+            "- When a user task asks you to create, submit, or book something requiring organizational authorization (such as a certificate, maintenance work order, laboratory slot booking, grievance, or official request), you MUST invoke the appropriate request creation tool (e.g. certificate_requests.create_certificate_request, maintenance_tickets.create_maintenance_ticket, laboratory_bookings.create_lab_booking, grievance_escalation.create_grievance, or requests.create_request).\n"
+            "- The request will be submitted to the workspace institutional review queue in 'SUBMITTED' state.\n"
+            "- In your final answer, clearly inform the user of the generated Case Reference ID (e.g. `REQ-2026-000001`), summarize what was submitted, state that it is currently awaiting review by an authorized Workspace Admin or Owner in the Review Center, and let them know they can track its status in the 'My Requests' tab.\n"
+            "- Do NOT claim that an unapproved request is already completed, issued, or dispatched; always state that it is submitted and awaiting review.\n"
         )
 
         # Enhance system instruction with workspace instructions (system prompt & skills)
@@ -832,6 +860,20 @@ class ExecutionService:
                 # Update the execution mode flag (REAL or SIMULATED)
                 execution.mode = mode
                 execution.save()
+
+                if output and isinstance(output, str) and output.startswith("Error:"):
+                    action.status = 'FAILED'
+                    action.output_data = sanitize_data({'error': output}, resolved_key)
+                    action.completed_at = timezone.now()
+                    action.save()
+
+                    ExecutionEvent.objects.create(
+                        task=task,
+                        execution=execution,
+                        event_type='ACTION_COMPLETED',
+                        metadata=sanitize_data({'action_id': str(action.id), 'status': 'FAILED', 'error': output}, resolved_key)
+                    )
+                    raise RuntimeError(output)
 
                 # Robust tool call extraction & validation
                 tool_call, validation_error, is_tool_attempt = self._extract_and_validate_tool_call(

@@ -25,14 +25,18 @@ SECRET_KEY = config("SECRET_KEY")
 
 import sys
 TESTING = len(sys.argv) > 1 and sys.argv[1] == 'test'
-PROVIDER_CREDENTIAL_ENCRYPTION_KEY = config("PROVIDER_CREDENTIAL_ENCRYPTION_KEY", default=None)
-if not PROVIDER_CREDENTIAL_ENCRYPTION_KEY and TESTING:
-    PROVIDER_CREDENTIAL_ENCRYPTION_KEY = "VKbEp7xoahybtJudnEGmU0nO3wV3lbGHV18Z9PfoNKU="
+PROVIDER_CREDENTIAL_ENCRYPTION_KEY = config(
+    "PROVIDER_CREDENTIAL_ENCRYPTION_KEY", 
+    default="VKbEp7xoahybtJudnEGmU0nO3wV3lbGHV18Z9PfoNKU="
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG", default=True, cast=bool)
 
-ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="127.0.0.1,localhost").split(",")
+ALLOWED_HOSTS = [h.strip() for h in config("ALLOWED_HOSTS", default="127.0.0.1,localhost,testserver").split(",") if h.strip()]
+for default_host in ("127.0.0.1", "localhost", "testserver"):
+    if default_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(default_host)
 
 
 # Application definition
@@ -92,8 +96,17 @@ WSGI_APPLICATION = "config.wsgi.application"
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 import urllib.parse
+
+USE_SQLITE = config("USE_SQLITE", default=False, cast=bool)
 DATABASE_URL = config("DATABASE_URL", default="")
-if DATABASE_URL:
+if USE_SQLITE:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
+elif DATABASE_URL:
     url = urllib.parse.urlparse(DATABASE_URL)
     DATABASES = {
         "default": {
@@ -179,3 +192,9 @@ CSRF_TRUSTED_ORIGINS = config(
     "CSRF_TRUSTED_ORIGINS",
     default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
 ).split(",")
+
+# AI Provider Settings
+NVIDIA_NIM_BASE_URL = config("NVIDIA_NIM_BASE_URL", default="https://integrate.api.nvidia.com/v1")
+NVIDIA_NIM_DEFAULT_MODEL = config("NVIDIA_NIM_DEFAULT_MODEL", default="meta/llama-3.2-11b-vision-instruct")
+GROQ_BASE_URL = config("GROQ_BASE_URL", default="https://api.groq.com/openai/v1")
+GROQ_DEFAULT_MODEL = config("GROQ_DEFAULT_MODEL", default="llama-3.3-70b-versatile")

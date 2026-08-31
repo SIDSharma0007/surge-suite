@@ -173,3 +173,44 @@ def me_api(request):
             "name": request.user.first_name or request.user.username,
         }
     })
+
+@api_view(['POST'])
+def dev_login_api(request):
+    """
+    POST /api/v1/auth/dev-login/
+    Allows rapid testing by switching session to a specific test account (owner, admin, member, viewer).
+    """
+    from django.contrib.auth.models import User
+    from django.contrib.auth import login as django_login
+    from workspace.models import Workspace
+
+    role_target = request.data.get('role', '').lower().strip()
+    target_username = request.data.get('username', '').strip()
+
+    target_user = None
+
+    if target_username:
+        target_user = User.objects.filter(username=target_username).first()
+    elif role_target == 'owner':
+        owner_ws = Workspace.objects.first()
+        target_user = owner_ws.owner if owner_ws else User.objects.first()
+    elif role_target == 'admin':
+        target_user, _ = User.objects.get_or_create(username='admin_demo', defaults={'first_name': 'Admin User'})
+    elif role_target == 'member':
+        target_user, _ = User.objects.get_or_create(username='member_demo', defaults={'first_name': 'Member User'})
+    elif role_target == 'viewer':
+        target_user, _ = User.objects.get_or_create(username='viewer_demo', defaults={'first_name': 'Viewer User'})
+
+    if not target_user:
+        return Response({"error": f"Target user for role '{role_target}' not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    django_login(request, target_user)
+
+    return Response({
+        "authenticated": True,
+        "user": {
+            "user_id": target_user.username,
+            "name": target_user.first_name or target_user.username,
+        },
+        "role": role_target.upper() if role_target else "CUSTOM"
+    }, status=status.HTTP_200_OK)

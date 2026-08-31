@@ -58,6 +58,8 @@ export default function ReviewCenterTab({ workspace, userRole = 'ADMIN', initial
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [actionType, setActionType] = useState(null); // 'escalate' | 'approve' | 'reject' | 'detail'
   const [actionReason, setActionReason] = useState('');
+  const [certificateImage, setCertificateImage] = useState('');
+  const [documentUrl, setDocumentUrl] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState('');
 
@@ -131,7 +133,14 @@ export default function ReviewCenterTab({ workspace, userRole = 'ADMIN', initial
       if (actionType === 'escalate') {
         await reviewCenterServices.escalate(selectedRequest.id, { reason: actionReason.trim() });
       } else if (actionType === 'approve') {
-        await reviewCenterServices.approve(selectedRequest.id, { reason: actionReason.trim() });
+        const payload = { reason: actionReason.trim() };
+        const custom_evidence = {};
+        if (certificateImage.trim()) custom_evidence.certificate_image = certificateImage.trim();
+        if (documentUrl.trim()) custom_evidence.document_url = documentUrl.trim();
+        if (Object.keys(custom_evidence).length > 0) {
+          payload.custom_evidence = custom_evidence;
+        }
+        await reviewCenterServices.approve(selectedRequest.id, payload);
       } else if (actionType === 'reject') {
         await reviewCenterServices.reject(selectedRequest.id, { reason: actionReason.trim() });
       }
@@ -140,6 +149,8 @@ export default function ReviewCenterTab({ workspace, userRole = 'ADMIN', initial
       setActionType(null);
       setSelectedRequest(null);
       setActionReason('');
+      setCertificateImage('');
+      setDocumentUrl('');
       fetchQueueRequests();
     } catch (err) {
       console.error(err);
@@ -153,6 +164,8 @@ export default function ReviewCenterTab({ workspace, userRole = 'ADMIN', initial
     setSelectedRequest(req);
     setActionType(type);
     setActionReason('');
+    setCertificateImage('');
+    setDocumentUrl('');
     setActionError('');
   };
 
@@ -713,6 +726,71 @@ export default function ReviewCenterTab({ workspace, userRole = 'ADMIN', initial
                       color: 'var(--text-secondary)',
                     }}>
                       Escalating transfers this case directly to the <strong>Workspace Owner</strong> for final authorization. Please detail the policy or financial reason.
+                    </div>
+                  )}
+
+                  {actionType === 'approve' && selectedRequest.request_type === 'CERTIFICATE' && (
+                    <div style={{
+                      background: 'rgba(59, 130, 246, 0.05)',
+                      border: '1px solid rgba(59, 130, 246, 0.2)',
+                      borderRadius: '8px',
+                      padding: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Award size={14} style={{ color: '#3b82f6' }} />
+                        <span style={{ fontSize: '12px', fontWeight: '700', color: 'var(--text-primary)' }}>
+                          Certificate Delivery Assets (Optional)
+                        </span>
+                      </div>
+
+                      <div>
+                        <label style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                          Certificate Image / Badge (Data URL or Image URL)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="https://... or data:image/png;base64,... (or leave blank to auto-generate visual badge)"
+                          value={certificateImage}
+                          onChange={(e) => setCertificateImage(e.target.value)}
+                          style={{
+                            width: '100%',
+                            background: 'var(--bg-card)',
+                            border: '1px solid var(--border-medium)',
+                            borderRadius: '6px',
+                            padding: '6px 10px',
+                            fontSize: '12px',
+                            color: 'var(--text-primary)',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                          Official Document / PDF Download URL
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="https://institutional-docs.org/certs/..."
+                          value={documentUrl}
+                          onChange={(e) => setDocumentUrl(e.target.value)}
+                          style={{
+                            width: '100%',
+                            background: 'var(--bg-card)',
+                            border: '1px solid var(--border-medium)',
+                            borderRadius: '6px',
+                            padding: '6px 10px',
+                            fontSize: '12px',
+                            color: 'var(--text-primary)',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
                     </div>
                   )}
 

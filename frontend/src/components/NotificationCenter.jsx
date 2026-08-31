@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { notificationServices } from '../services/requestServices';
 
-export default function NotificationCenter({ workspaceId, onSelectRequest }) {
+export default function NotificationCenter({ workspaceId, userKey, onSelectRequest }) {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -44,16 +44,18 @@ export default function NotificationCenter({ workspaceId, onSelectRequest }) {
   };
 
   useEffect(() => {
+    setUnreadCount(0);
+    setNotifications([]);
     fetchUnreadCount();
     const interval = setInterval(fetchUnreadCount, 15000);
     return () => clearInterval(interval);
-  }, [workspaceId]);
+  }, [workspaceId, userKey]);
 
   useEffect(() => {
     if (open) {
       fetchNotifications();
     }
-  }, [open, workspaceId]);
+  }, [open, workspaceId, userKey]);
 
   // Close dropdown on click outside
   useEffect(() => {

@@ -130,11 +130,21 @@ def main():
                             if user_role == "VIEWER":
                                 result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot create maintenance tickets."}], "isError": True}
                             else:
+                                from task.services.request_service import RequestService
                                 category = arguments.get("category")
                                 description = arguments.get("description")
                                 location = arguments.get("location")
                                 
-                                ticket = MaintenanceTicket.objects.create(
+                                ws_req = RequestService.create_request(
+                                    workspace=workspace,
+                                    requester=user,
+                                    request_type='MAINTENANCE',
+                                    title=f"Maintenance Ticket: {category} ({location})",
+                                    description=description,
+                                    payload={"category": category, "location": location, "description": description}
+                                )
+                                
+                                MaintenanceTicket.objects.create(
                                     workspace=workspace,
                                     user=user,
                                     category=category,
@@ -142,45 +152,75 @@ def main():
                                     location=location,
                                     status='OPEN'
                                 )
-                                text = f"Successfully created maintenance ticket.\nID: {ticket.id}\nCategory: {ticket.category}\nLocation: {ticket.location}\nStatus: {ticket.status}"
+                                text = (
+                                    f"Successfully submitted maintenance ticket for organizational review.\n"
+                                    f"Case Reference ID: {ws_req.display_id}\n"
+                                    f"Category: {category}\n"
+                                    f"Location: {location}\n"
+                                    f"Status: SUBMITTED (Awaiting Admin/Owner Review in Review Center)\n"
+                                    f"Description: {description}"
+                                )
                                 result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "list_maintenance_tickets":
+                            from task.models import WorkspaceRequest
                             if user_role in ['ADMIN', 'OWNER']:
-                                tickets = MaintenanceTicket.objects.filter(workspace=workspace)
+                                tickets = WorkspaceRequest.objects.filter(workspace=workspace, request_type='MAINTENANCE', is_archived=False)
                             else:
-                                tickets = MaintenanceTicket.objects.filter(workspace=workspace, user=user)
+                                tickets = WorkspaceRequest.objects.filter(workspace=workspace, requester=user, request_type='MAINTENANCE', is_archived=False)
                             if tickets.exists():
-                                lines = [f"- {t.id}: {t.category} at {t.location} [{t.status}] (by @{t.user.username})" for t in tickets]
+                                lines = [f"- {t.display_id}: {t.title} [{t.decision_status}] (by @{t.requester.username})" for t in tickets]
                                 text = "Maintenance tickets:\n" + "\n".join(lines)
                             else:
                                 text = "No maintenance tickets found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name in ["get_maintenance_ticket", "get_ticket_status"]:
+                            from task.models import WorkspaceRequest
                             ticket_id = arguments.get("ticket_id")
                             try:
+                                from django.db.models import Q
                                 if user_role in ['ADMIN', 'OWNER']:
-                                    t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace)
+                                    t = WorkspaceRequest.objects.get(Q(id=ticket_id) | Q(display_id=ticket_id), workspace=workspace)
                                 else:
-                                    t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
-                                text = f"Maintenance Ticket Details:\nID: {t.id}\nCategory: {t.category}\nDescription: {t.description}\nLocation: {t.location}\nStatus: {t.status}\nCreated: {t.created_at.isoformat()}"
-                            except (MaintenanceTicket.DoesNotExist, ValueError):
-                                text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
+                                    t = WorkspaceRequest.objects.get(Q(id=ticket_id) | Q(display_id=ticket_id), workspace=workspace, requester=user)
+                                evidence_info = f"\nEvidence: {json.dumps(t.execution_evidence)}" if t.execution_evidence else ""
+                                text = (
+                                    f"Maintenance Ticket Details:\n"
+                                    f"Display ID: {t.display_id}\n"
+                                    f"Title: {t.title}\n"
+                                    f"Description: {t.description}\n"
+                                    f"Decision Status: {t.decision_status}\n"
+                                    f"Execution Status: {t.execution_status}\n"
+                                    f"Requester: @{t.requester.username}\n"
+                                    f"Created: {t.created_at.isoformat()}"
+                                    f"{evidence_info}"
+                                )
+                            except Exception:
+                                try:
+                                    if user_role in ['ADMIN', 'OWNER']:
+                                        t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace)
+                                    else:
+                                        t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
+                                    text = f"Maintenance Ticket Details:\nID: {t.id}\nCategory: {t.category}\nDescription: {t.description}\nLocation: {t.location}\nStatus: {t.status}\nCreated: {t.created_at.isoformat()}"
+                                except Exception:
+                                    text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "update_maintenance_ticket":
+                            from task.models import WorkspaceRequest
                             if user_role == "VIEWER":
                                 result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot update maintenance tickets."}], "isError": True}
                             else:
                                 ticket_id = arguments.get("ticket_id")
                                 description = arguments.get("description")
                                 try:
+                                    from django.db.models import Q
                                     if user_role in ['ADMIN', 'OWNER']:
-                                        t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace)
+                                        t = WorkspaceRequest.objects.get(Q(id=ticket_id) | Q(display_id=ticket_id), workspace=workspace)
                                     else:
-                                        t = MaintenanceTicket.objects.get(id=ticket_id, workspace=workspace, user=user)
+                                        t = WorkspaceRequest.objects.get(Q(id=ticket_id) | Q(display_id=ticket_id), workspace=workspace, requester=user)
                                     t.description = description
                                     t.save()
-                                    text = f"Successfully updated maintenance ticket {t.id} description."
-                                except (MaintenanceTicket.DoesNotExist, ValueError):
+                                    text = f"Successfully updated maintenance ticket {t.display_id} description."
+                                except Exception:
                                     text = f"Error: Maintenance ticket with ID '{ticket_id}' not found."
                                 result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "close_maintenance_ticket":

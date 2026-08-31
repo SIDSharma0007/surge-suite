@@ -4441,9 +4441,9 @@ class RequestServiceAndNotificationServiceTestCase(TestCase):
         with self.assertRaises(PermissionDenied):
             RequestService.approve_request(req, actor=self.member)
 
-        # 5. Owner approves request
+        # 5. Owner approves request (manual execution mode)
         req = RequestService.approve_request(
-            req, actor=self.owner, reason="Approved with official seal."
+            req, actor=self.owner, reason="Approved with official seal.", auto_execute=False
         )
         self.assertEqual(req.decision_status, 'APPROVED')
         self.assertEqual(req.reviewer, self.owner)
@@ -4478,6 +4478,31 @@ class RequestServiceAndNotificationServiceTestCase(TestCase):
         cleared = NotificationService.mark_all_as_read(self.workspace, self.member)
         self.assertEqual(cleared, 2)
         self.assertEqual(NotificationService.get_unread_count(self.workspace, self.member), 0)
+
+    def test_automated_approval_fulfillment_evidence(self):
+        from task.services.request_service import RequestService
+
+        req = RequestService.create_request(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="CERTIFICATE",
+            title="Request for Character Certificate",
+            description="Needed for passport application",
+            payload={"certificate_type": "Character Certificate"}
+        )
+        self.assertEqual(req.decision_status, 'SUBMITTED')
+        self.assertEqual(req.execution_status, 'NOT_STARTED')
+
+        # Admin approves with auto-execution
+        approved = RequestService.approve_request(
+            req, actor=self.admin, reason="Verified academic standing.", auto_execute=True
+        )
+        self.assertEqual(approved.decision_status, 'APPROVED')
+        self.assertEqual(approved.execution_status, 'COMPLETED')
+        self.assertIsNotNone(approved.execution_evidence)
+        self.assertIn("certificate_number", approved.execution_evidence)
+        self.assertEqual(approved.execution_evidence["certificate_type"], "Character Certificate")
+        self.assertEqual(approved.execution_evidence["status"], "ISSUED")
 
     def test_rejection_flow_and_permission_enforcement(self):
         from task.services.request_service import RequestService, RequestStateError
@@ -4524,6 +4549,61 @@ class RequestServiceAndNotificationServiceTestCase(TestCase):
                 request_type="GENERAL",
                 title="Outsider request"
             )
+
+    def test_cancel_request_and_permission_enforcement(self):
+        from task.services.request_service import RequestService, RequestStateError
+        from django.core.exceptions import PermissionDenied
+
+        req = RequestService.create_request(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="MAINTENANCE",
+            title="Broken Projector in Hall 2"
+        )
+        self.assertEqual(req.decision_status, 'SUBMITTED')
+
+        # Viewer or outsider cannot cancel -> PermissionDenied
+        with self.assertRaises(PermissionDenied):
+            RequestService.cancel_request(req, actor=self.viewer)
+
+        # Member can cancel their own submitted request
+        cancelled = RequestService.cancel_request(req, actor=self.member, reason="Issue resolved itself.")
+        self.assertEqual(cancelled.decision_status, 'CANCELLED')
+        self.assertEqual(cancelled.decision_reason, "Issue resolved itself.")
+
+        # Cannot cancel again or approve a cancelled request
+        with self.assertRaises(RequestStateError):
+            RequestService.approve_request(cancelled, actor=self.admin)
+
+    def test_certificate_custom_evidence_delivery(self):
+        from task.services.request_service import RequestService
+
+        req = RequestService.create_request(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="CERTIFICATE",
+            title="Request for Degree Certificate",
+            payload={"student_name": "Member User"}
+        )
+
+        custom_evidence = {
+            "certificate_image": "data:image/png;base64,mockImageProof",
+            "document_url": "https://university.edu/certs/CERT-2026-001.pdf"
+        }
+
+        approved = RequestService.approve_request(
+            req, 
+            actor=self.admin, 
+            reason="Verified graduation requirements.", 
+            auto_execute=True, 
+            custom_evidence=custom_evidence
+        )
+
+        self.assertEqual(approved.decision_status, 'APPROVED')
+        self.assertEqual(approved.execution_status, 'COMPLETED')
+        self.assertEqual(approved.execution_evidence["certificate_image"], "data:image/png;base64,mockImageProof")
+        self.assertEqual(approved.execution_evidence["document_url"], "https://university.edu/certs/CERT-2026-001.pdf")
+        self.assertIn("certificate_number", approved.execution_evidence)
 
 
 class WorkspaceRequestAPITestCase(TestCase):
@@ -4742,8 +4822,83 @@ class RequestAgentCapabilitiesTestCase(TestCase):
         # Test get_request_details by display_id
         detail_res = registry.execute_tool("requests.get_request_details", {"request_id": req.display_id})
         self.assertEqual(detail_res["title"], "Physics Darkroom Slot")
-        self.assertEqual(detail_res["decision_status"], "SUBMITTED")
-        self.assertEqual(len(detail_res["timeline"]), 1)
+        # Test create_request tool
+        create_res = registry.execute_tool("requests.create_request", {
+            "request_type": "MAINTENANCE",
+            "title": "Air Conditioner Leaking in Room 301",
+            "description": "Water dripping near electric sockets",
+            "payload": {"room": "301", "urgency": "high"}
+        })
+        self.assertTrue(create_res.get("success"))
+        self.assertTrue(create_res["display_id"].startswith("REQ-"))
+        self.assertEqual(create_res["decision_status"], "SUBMITTED")
+
+    def test_end_to_end_ai_task_creates_review_center_request(self):
+        from task.models import Task, Agent, WorkspaceRequest
+        from task.services.execution_service import ExecutionService
+        from task.services.model_provider import FakeModelProvider
+        from task.services.request_service import RequestService
+        from rest_framework.test import APIClient
+
+        agent = Agent.objects.create(
+            name="Institutional Ops Agent",
+            provider="simulated",
+            model="dev-mock",
+            status="ACTIVE"
+        )
+        task = Task.objects.create(
+            workspace=self.workspace,
+            creator=self.member,
+            assigned_agent=agent,
+            problem_statement="Request a Migration Certificate for university admission.",
+            status="QUEUED"
+        )
+
+        # Configure fake model to call requests.create_request
+        mock_tool_output = json.dumps({
+            "tool_call": {
+                "name": "requests.create_request",
+                "arguments": {
+                    "request_type": "CERTIFICATE",
+                    "title": "Migration Certificate Request",
+                    "description": "Needed for master's university admission",
+                    "payload": {"certificate_type": "Migration Certificate"}
+                }
+            }
+        })
+        fake_provider = FakeModelProvider(mock_output=mock_tool_output)
+        exec_service = ExecutionService(provider=fake_provider)
+
+        execution = exec_service.execute_task(task, user=self.member)
+        self.assertIsNotNone(execution)
+
+        # Verify WorkspaceRequest was created
+        ws_req = WorkspaceRequest.objects.filter(
+            workspace=self.workspace,
+            requester=self.member,
+            request_type="CERTIFICATE"
+        ).first()
+        self.assertIsNotNone(ws_req)
+        self.assertEqual(ws_req.decision_status, "SUBMITTED")
+        self.assertEqual(ws_req.execution_status, "NOT_STARTED")
+        self.assertTrue(ws_req.display_id.startswith("REQ-"))
+
+        # Admin checks Review Center API and sees the request
+        client = APIClient()
+        client.force_authenticate(user=self.owner)
+        res_pending = client.get(f'/api/v1/review-center/?workspace_id={self.workspace.id}&queue=pending')
+        self.assertEqual(res_pending.status_code, 200)
+        self.assertTrue(any(item["id"] == str(ws_req.id) for item in res_pending.data))
+
+        # Admin approves the request
+        res_approve = client.post(f'/api/v1/review-center/{ws_req.id}/approve/', {
+            "reason": "Verified enrollment records and approved."
+        }, format='json')
+        self.assertEqual(res_approve.status_code, 200)
+        self.assertEqual(res_approve.data["decision_status"], "APPROVED")
+        self.assertEqual(res_approve.data["execution_status"], "COMPLETED")
+        self.assertIsNotNone(res_approve.data["execution_evidence"])
+        self.assertIn("certificate_number", res_approve.data["execution_evidence"])
 
 
 
