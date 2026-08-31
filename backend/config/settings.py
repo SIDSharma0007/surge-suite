@@ -97,8 +97,16 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 import urllib.parse
 
+USE_SQLITE = config("USE_SQLITE", default=False, cast=bool)
 DATABASE_URL = config("DATABASE_URL", default="")
-if DATABASE_URL:
+if USE_SQLITE:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
+elif DATABASE_URL:
     url = urllib.parse.urlparse(DATABASE_URL)
     DATABASES = {
         "default": {
