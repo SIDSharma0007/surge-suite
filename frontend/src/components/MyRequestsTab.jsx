@@ -41,6 +41,7 @@ const DECISION_STATUS_STYLES = {
   ESCALATED: { bg: 'rgba(168, 85, 247, 0.12)', color: '#a855f7', label: 'Escalated to Owner' },
   APPROVED: { bg: 'rgba(34, 197, 94, 0.1)', color: 'var(--status-success, #22c55e)', label: 'Approved' },
   REJECTED: { bg: 'rgba(239, 68, 68, 0.1)', color: 'var(--status-error, #ef4444)', label: 'Rejected' },
+  CANCELLED: { bg: 'rgba(100, 116, 139, 0.1)', color: '#94a3b8', label: 'Withdrawn' },
 };
 
 export default function MyRequestsTab({ workspace, isViewer = false, initialRequestId = null }) {
@@ -65,6 +66,19 @@ export default function MyRequestsTab({ workspace, isViewer = false, initialRequ
   const [createPayload, setCreatePayload] = useState({});
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [createError, setCreateError] = useState('');
+
+  const handleCancelRequest = async (reqId) => {
+    if (!window.confirm("Are you sure you want to withdraw/cancel this pending request?")) return;
+    try {
+      await requestServices.cancel(reqId, { reason: "Withdrawn by requester" });
+      fetchRequests();
+      setDetailModalOpen(false);
+      setSelectedRequest(null);
+    } catch (err) {
+      console.error("Failed to cancel request:", err);
+      alert(err.response?.data?.error || "Failed to cancel request.");
+    }
+  };
 
   const fetchRequests = async () => {
     if (!workspace?.id) return;
@@ -580,6 +594,110 @@ export default function MyRequestsTab({ workspace, isViewer = false, initialRequ
                 </div>
               )}
 
+              {/* Certificate Official Presentation Card (when approved) */}
+              {selectedRequest.request_type === 'CERTIFICATE' && selectedRequest.decision_status === 'APPROVED' && (
+                <div style={{
+                  background: 'linear-gradient(135deg, rgba(217, 119, 6, 0.08) 0%, rgba(245, 158, 11, 0.03) 100%)',
+                  border: '1px solid rgba(217, 119, 6, 0.35)',
+                  borderRadius: '12px',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Award size={20} style={{ color: '#d97706' }} />
+                      <span style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-primary)' }}>
+                        Institutional Certificate
+                      </span>
+                    </div>
+                    <span style={{
+                      fontFamily: 'monospace',
+                      fontSize: '11px',
+                      fontWeight: '700',
+                      color: '#d97706',
+                      background: 'rgba(217, 119, 6, 0.15)',
+                      padding: '3px 8px',
+                      borderRadius: '4px'
+                    }}>
+                      {selectedRequest.execution_evidence?.certificate_number || selectedRequest.display_id}
+                    </span>
+                  </div>
+
+                  {selectedRequest.execution_evidence?.certificate_image && (
+                    <div style={{ marginTop: '6px', textAlign: 'center', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-medium)', background: '#000000' }}>
+                      <img 
+                        src={selectedRequest.execution_evidence.certificate_image} 
+                        alt="Official Certificate" 
+                        style={{ maxWidth: '100%', maxHeight: '280px', objectFit: 'contain', display: 'block', margin: '0 auto' }} 
+                      />
+                    </div>
+                  )}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', fontSize: '12px' }}>
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>Authorized Recipient</span>
+                      <strong style={{ color: 'var(--text-primary)' }}>{selectedRequest.requester_username || 'Member'}</strong>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>Issue Date</span>
+                      <strong style={{ color: 'var(--text-primary)' }}>
+                        {selectedRequest.execution_evidence?.issue_date || new Date(selectedRequest.reviewed_at || selectedRequest.created_at).toLocaleDateString()}
+                      </strong>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>Status</span>
+                      <span style={{ color: 'var(--status-success)', fontWeight: '600' }}>✓ Verified & Signed</span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                    {selectedRequest.execution_evidence?.document_url && (
+                      <a
+                        href={selectedRequest.execution_evidence.document_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          textDecoration: 'none',
+                          background: '#d97706',
+                          color: '#ffffff',
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          padding: '6px 14px',
+                          borderRadius: '6px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <FileText size={13} />
+                        Download Official PDF
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      style={{
+                        background: 'var(--bg-hover)',
+                        border: '1px solid var(--border-medium)',
+                        color: 'var(--text-primary)',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        padding: '6px 14px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      Print / Save Certificate
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Execution Evidence / Proof Section */}
               {selectedRequest.execution_evidence && Object.keys(selectedRequest.execution_evidence).length > 0 && (
                 <div style={{
@@ -654,6 +772,42 @@ export default function MyRequestsTab({ workspace, isViewer = false, initialRequ
                 )}
               </div>
             </div>
+
+            {/* Modal Footer with Actions */}
+            {['SUBMITTED', 'UNDER_REVIEW', 'ESCALATED'].includes(selectedRequest.decision_status) && (
+              <div style={{
+                padding: '12px 20px',
+                borderTop: '1px solid var(--border-subtle)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'var(--bg-secondary)',
+              }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  This request is pending review. You may withdraw it before review completes.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleCancelRequest(selectedRequest.id)}
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.08)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: 'var(--status-error, #ef4444)',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    padding: '6px 14px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <XCircle size={14} />
+                  Withdraw Request
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

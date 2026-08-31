@@ -25,11 +25,12 @@ class RequestService:
     """
 
     VALID_DECISION_TRANSITIONS = {
-        'SUBMITTED': ['UNDER_REVIEW', 'ESCALATED', 'APPROVED', 'REJECTED'],
-        'UNDER_REVIEW': ['ESCALATED', 'APPROVED', 'REJECTED'],
-        'ESCALATED': ['APPROVED', 'REJECTED'],
+        'SUBMITTED': ['UNDER_REVIEW', 'ESCALATED', 'APPROVED', 'REJECTED', 'CANCELLED'],
+        'UNDER_REVIEW': ['ESCALATED', 'APPROVED', 'REJECTED', 'CANCELLED'],
+        'ESCALATED': ['APPROVED', 'REJECTED', 'CANCELLED'],
         'APPROVED': [], # Terminal decision state
         'REJECTED': [], # Terminal decision state
+        'CANCELLED': [], # Terminal decision state
     }
 
     @staticmethod
@@ -183,9 +184,80 @@ class RequestService:
         return request
 
     @classmethod
-    def approve_request(cls, request: WorkspaceRequest, actor: User, reason: str = "") -> WorkspaceRequest:
+    def _generate_default_fulfillment_evidence(cls, request: WorkspaceRequest, actor: User) -> dict:
+        import uuid
+        year = timezone.now().year
+        suffix = request.display_id.split('-')[-1] if '-' in request.display_id else uuid.uuid4().hex[:6].upper()
+        
+        req_type = request.request_type
+        payload = request.payload or {}
+
+        if req_type == 'CERTIFICATE':
+            cert_name = payload.get('certificate_type') or request.title
+            return {
+                "certificate_number": f"CERT-{year}-{suffix}",
+                "certificate_type": cert_name,
+                "recipient": request.requester.username,
+                "issued_by": actor.username,
+                "verification_code": uuid.uuid4().hex[:12].upper(),
+                "issued_at": timezone.now().isoformat(),
+                "status": "ISSUED"
+            }
+        elif req_type == 'LAB_BOOKING':
+            lab = payload.get('laboratory') or payload.get('lab_name') or "Main Research Laboratory"
+            slot = payload.get('time_slot') or payload.get('slot') or "10:00 AM - 12:00 PM"
+            date_val = payload.get('date') or timezone.now().strftime("%Y-%m-%d")
+            return {
+                "booking_reference": f"LAB-BK-{year}-{suffix}",
+                "laboratory": lab,
+                "booking_date": date_val,
+                "time_slot": slot,
+                "authorized_by": actor.username,
+                "confirmed_at": timezone.now().isoformat(),
+                "status": "CONFIRMED"
+            }
+        elif req_type == 'MAINTENANCE':
+            cat = payload.get('category') or "General Maintenance"
+            loc = payload.get('location') or "Campus Facility"
+            return {
+                "work_order_id": f"MNT-{year}-{suffix}",
+                "category": cat,
+                "location": loc,
+                "dispatched_to": "Facility Maintenance Team",
+                "authorized_by": actor.username,
+                "dispatched_at": timezone.now().isoformat(),
+                "status": "DISPATCHED"
+            }
+        elif req_type == 'GRIEVANCE':
+            dept = payload.get('department') or "Institutional Affairs"
+            return {
+                "case_file_id": f"GRV-{year}-{suffix}",
+                "department": dept,
+                "action_taken": "Reviewer authorized institutional grievance committee follow-up.",
+                "authorized_by": actor.username,
+                "accepted_at": timezone.now().isoformat(),
+                "status": "ACCEPTED"
+            }
+        else:
+            return {
+                "resolution_id": f"RES-{year}-{suffix}",
+                "authorized_by": actor.username,
+                "resolved_at": timezone.now().isoformat(),
+                "status": "FULFILLED"
+            }
+
+    @classmethod
+    def approve_request(
+        cls,
+        request: WorkspaceRequest,
+        actor: User,
+        reason: str = "",
+        auto_execute: bool = True,
+        custom_evidence: dict = None
+    ) -> WorkspaceRequest:
         """
-        Approves a request (Owner or authorized Admin).
+        Approves a request. Restricted to ADMIN and OWNER roles.
+        Optionally triggers immediate domain execution and evidence recording.
         """
         actor_role = cls._resolve_user_role(request.workspace, actor)
         if actor_role not in ['ADMIN', 'OWNER']:
@@ -226,6 +298,69 @@ class RequestService:
                 message=f"Your request {request.display_id} ('{request.title}') has been approved.",
                 request=request,
                 action_url=f"/my-requests?request_id={request.id}"
+            )
+
+            if auto_execute:
+                # Trigger domain execution fulfillment
+                evidence = cls._generate_default_fulfillment_evidence(request, actor)
+                if custom_evidence and isinstance(custom_evidence, dict):
+                    evidence.update(custom_evidence)
+                cls.record_execution_evidence(
+                    request=request,
+                    evidence=evidence,
+                    result={"status": "SUCCESS", "message": f"Authorized action fulfilled by {actor.username}."},
+                    success=True,
+                    actor=actor
+                )
+
+        return request
+
+    @classmethod
+    def cancel_request(cls, request: WorkspaceRequest, actor: User, reason: str = "") -> WorkspaceRequest:
+        """
+        Cancels / withdraws a submitted or in-review request by the requester or owner.
+        """
+        actor_role = cls._resolve_user_role(request.workspace, actor)
+        is_requester = request.requester == actor
+        is_owner = actor_role == 'OWNER'
+
+        if not is_requester and not is_owner:
+            raise PermissionDenied("Only the original requester or workspace owner can cancel this request.")
+
+        if request.decision_status in ['APPROVED', 'REJECTED']:
+            raise RequestStateError("Finalized requests cannot be cancelled.")
+
+        allowed = cls.VALID_DECISION_TRANSITIONS.get(request.decision_status, [])
+        if 'CANCELLED' not in allowed:
+            raise RequestStateError(f"Cannot cancel request in '{request.decision_status}' status.")
+
+        with transaction.atomic():
+            old_status = request.decision_status
+            request.decision_status = 'CANCELLED'
+            request.decision_reason = reason.strip() if reason else "Cancelled by requester."
+            request.save()
+
+            RequestEvent.objects.create(
+                request=request,
+                actor=actor,
+                actor_role=actor_role,
+                event_type='CANCELLED',
+                from_status=old_status,
+                to_status='CANCELLED',
+                message=f"Request cancelled by {actor.username}." + (f" Reason: {reason.strip()}" if reason else ""),
+                is_internal=False,
+                metadata={"reason": reason.strip()}
+            )
+
+            # Notify admins/owner that the request was cancelled/withdrawn
+            NotificationService.notify_workspace_admins_and_owner(
+                workspace=request.workspace,
+                notification_type='REQUEST_CANCELLED',
+                title='Request Withdrawn',
+                message=f"Request {request.display_id} ('{request.title}') was withdrawn by {actor.username}.",
+                request=request,
+                action_url=f"/my-requests?request_id={request.id}",
+                exclude_user=actor
             )
 
         return request

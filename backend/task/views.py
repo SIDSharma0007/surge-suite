@@ -339,6 +339,18 @@ class ProviderSettingsDetailView(APIView):
         return self._save_key(request, provider)
 
     def _save_key(self, request, provider):
+        user = request.user
+        from workspace.models import Workspace, WorkspaceMembership
+        is_owner_or_admin = (
+            Workspace.objects.filter(owner=user).exists() or 
+            WorkspaceMembership.objects.filter(user=user, role__in=['ADMIN', 'OWNER']).exists()
+        )
+        if not is_owner_or_admin:
+            return Response(
+                {"error": "Permission Denied: Only Workspace Owners and Admins are authorized to configure AI provider API keys."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         provider = provider.lower()
         if provider not in SUPPORTED_PROVIDERS:
             return Response(
@@ -353,7 +365,6 @@ class ProviderSettingsDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        user = request.user
         encrypted = encrypt_value(api_key)
         
         # Save or update credential atomically
@@ -376,6 +387,18 @@ class ProviderSettingsDetailView(APIView):
         }, status=status.HTTP_200_OK)
 
     def delete(self, request, provider):
+        user = request.user
+        from workspace.models import Workspace, WorkspaceMembership
+        is_owner_or_admin = (
+            Workspace.objects.filter(owner=user).exists() or 
+            WorkspaceMembership.objects.filter(user=user, role__in=['ADMIN', 'OWNER']).exists()
+        )
+        if not is_owner_or_admin:
+            return Response(
+                {"error": "Permission Denied: Only Workspace Owners and Admins are authorized to delete AI provider API keys."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         provider = provider.lower()
         if provider not in SUPPORTED_PROVIDERS:
             return Response(
@@ -383,7 +406,6 @@ class ProviderSettingsDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        user = request.user
         deleted_count, _ = UserProviderCredential.objects.filter(user=user, provider=provider).delete()
         
         return Response({
@@ -713,6 +735,25 @@ class WorkspaceRequestViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(archived_req)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'], url_path='cancel')
+    def cancel(self, request, pk=None):
+        from .services.request_service import RequestService
+        from django.core.exceptions import PermissionDenied, ValidationError
+
+        req_obj = get_object_or_404(WorkspaceRequest, id=pk)
+        reason = request.data.get('reason', '')
+        try:
+            cancelled_req = RequestService.cancel_request(req_obj, request.user, reason=reason)
+        except PermissionDenied as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(cancelled_req)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class ReviewCenterViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -824,9 +865,20 @@ class ReviewCenterViewSet(viewsets.ReadOnlyModelViewSet):
 
         req_obj = get_object_or_404(WorkspaceRequest, id=pk)
         reason = request.data.get('reason', '')
+        custom_evidence = request.data.get('custom_evidence') or {}
+        if request.data.get('certificate_image'):
+            custom_evidence['certificate_image'] = request.data.get('certificate_image')
+        if request.data.get('document_url'):
+            custom_evidence['document_url'] = request.data.get('document_url')
 
         try:
-            approved_req = RequestService.approve_request(req_obj, request.user, reason)
+            approved_req = RequestService.approve_request(
+                req_obj, 
+                request.user, 
+                reason=reason, 
+                auto_execute=True, 
+                custom_evidence=custom_evidence
+            )
         except PermissionDenied as e:
             return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
         except ValidationError as e:

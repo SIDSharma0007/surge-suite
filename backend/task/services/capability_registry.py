@@ -139,6 +139,37 @@ class CapabilityRegistry:
             tool_type="builtin"
         )
 
+        # 5. requests.create_request
+        self.register_tool(
+            name="requests.create_request",
+            description="Submit an institutional request (certificate, maintenance ticket, lab booking, grievance, or general request) for organizational approval.",
+            schema={
+                "type": "object",
+                "properties": {
+                    "request_type": {
+                        "type": "string",
+                        "enum": ["CERTIFICATE", "MAINTENANCE", "LAB_BOOKING", "GRIEVANCE", "GENERAL"],
+                        "description": "Category of the institutional request."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Brief summary or title of the request."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Detailed explanation of the request purpose."
+                    },
+                    "payload": {
+                        "type": "object",
+                        "description": "Key-value parameters (e.g. certificate_type, location, laboratory, time_slot)."
+                    }
+                },
+                "required": ["request_type", "title"]
+            },
+            handler=self.handle_create_request,
+            tool_type="builtin"
+        )
+
 
     # ------------------------------------------------------------------
     # Security classification
@@ -485,4 +516,47 @@ class CapabilityRegistry:
             "created_at": req.created_at.isoformat(),
             "updated_at": req.updated_at.isoformat()
         }
+
+    def handle_create_request(self, args: dict, **kwargs) -> dict:
+        """
+        Creates a WorkspaceRequest in SUBMITTED state awaiting Admin/Owner review.
+        """
+        if not self.user or not self.workspace:
+            return {"error": "Authentication and active workspace are required."}
+
+        from task.services.request_service import RequestService
+        from django.core.exceptions import PermissionDenied, ValidationError
+
+        request_type = args.get("request_type", "GENERAL")
+        title = args.get("title", "").strip()
+        description = args.get("description", "")
+        payload = args.get("payload", {})
+
+        if not title:
+            return {"error": "title is required."}
+
+        try:
+            req = RequestService.create_request(
+                workspace=self.workspace,
+                requester=self.user,
+                request_type=request_type,
+                title=title,
+                description=description,
+                payload=payload
+            )
+            return {
+                "success": True,
+                "id": str(req.id),
+                "display_id": req.display_id,
+                "request_type": req.request_type,
+                "title": req.title,
+                "decision_status": req.decision_status,
+                "message": f"Successfully submitted {req.get_request_type_display()} '{req.title}' ({req.display_id}) for organizational review."
+            }
+        except PermissionDenied as e:
+            return {"error": f"Permission Denied: {str(e)}"}
+        except ValidationError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            return {"error": f"Failed to submit request: {str(e)}"}
 

@@ -387,6 +387,7 @@ class WorkspaceRequest(models.Model):
         ('ESCALATED', 'Escalated'),
         ('APPROVED', 'Approved'),
         ('REJECTED', 'Rejected'),
+        ('CANCELLED', 'Cancelled'),
     ]
 
     EXECUTION_STATUSES = [
@@ -461,7 +462,7 @@ class RequestEvent(models.Model):
     request = models.ForeignKey(WorkspaceRequest, on_delete=models.CASCADE, related_name='timeline_events')
     actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='request_events')
     actor_role = models.CharField(max_length=50, default='SYSTEM')
-    event_type = models.CharField(max_length=50) # CREATED, CLASSIFIED, REVIEW_STARTED, ESCALATED, APPROVED, REJECTED, EXECUTION_STARTED, EXECUTION_COMPLETED, EXECUTION_FAILED, ARCHIVED
+    event_type = models.CharField(max_length=50) # CREATED, CLASSIFIED, REVIEW_STARTED, ESCALATED, APPROVED, REJECTED, CANCELLED, EXECUTION_STARTED, EXECUTION_COMPLETED, EXECUTION_FAILED, ARCHIVED
     from_status = models.CharField(max_length=50, blank=True, default='')
     to_status = models.CharField(max_length=50, blank=True, default='')
     message = models.TextField(blank=True)
@@ -488,6 +489,7 @@ class WorkspaceNotification(models.Model):
         ('REQUEST_ESCALATED', 'Request Escalated'),
         ('REQUEST_APPROVED', 'Request Approved'),
         ('REQUEST_REJECTED', 'Request Rejected'),
+        ('REQUEST_CANCELLED', 'Request Cancelled'),
         ('REQUEST_COMPLETED', 'Request Completed'),
         ('REQUEST_FAILED', 'Request Failed'),
         ('GENERAL', 'General Notification'),

@@ -13,6 +13,7 @@ import WorkspaceMembersModal from '../components/WorkspaceMembersModal';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import VoiceCommandButton from '../components/VoiceCommandButton';
 import AudioResponsePlayer from '../components/AudioResponsePlayer';
+import RoleSwitcher from '../components/RoleSwitcher';
 import { useVoiceRecognition } from '../hooks/useVoiceRecognition';
 import { workspaceServices } from '../services/workspaceServices';
 import { taskServices } from '../services/taskServices';
@@ -572,8 +573,28 @@ export default function Dashboard() {
           </div>
 
           <div style={styles.headerRight}>
+            <RoleSwitcher 
+              currentRole={activeWsRole} 
+              onProfileSwitched={async (newRole, newUser) => {
+                try {
+                  const wsRes = await workspaceServices.list();
+                  setWorkspaces(wsRes.data);
+                  if (wsRes.data && wsRes.data.length > 0) {
+                    const currentStillValid = wsRes.data.find(w => w.id === activeWorkspaceId);
+                    const targetWsId = currentStillValid ? currentStillValid.id : wsRes.data[0].id;
+                    setActiveWorkspaceId(targetWsId);
+                    localStorage.setItem('surge_active_workspace_id', targetWsId);
+                    loadTasks(targetWsId);
+                  }
+                } catch (err) {
+                  console.error("Failed to refresh workspaces on profile switch:", err);
+                }
+              }} 
+            />
             <NotificationCenter 
+              key={`${currentUser?.user_id || 'guest'}_${activeWorkspaceId}`}
               workspaceId={activeWorkspaceId} 
+              userKey={currentUser?.user_id}
               onSelectRequest={(reqId, notifType) => {
                 setSelectedRequestId(reqId);
                 if (notifType === 'REQUEST_ESCALATED' || notifType === 'NEW_REQUEST') {
@@ -1536,7 +1557,12 @@ export default function Dashboard() {
               />
             )
           ) : activeTab === 'Settings' ? (
-            <SettingsTab activeWorkspaceId={activeWorkspaceId} onWorkspaceUpdated={fetchWorkspaces} />
+            <SettingsTab 
+              activeWorkspaceId={activeWorkspaceId} 
+              userRole={activeWsRole} 
+              isOwnerOrAdmin={isOwnerOrAdmin} 
+              onWorkspaceUpdated={fetchWorkspaces} 
+            />
           ) : activeTab === 'DM Agent' ? (
             <DMAgentTab activeWorkspaceId={activeWorkspaceId} workspaces={workspaces} />
           ) : (

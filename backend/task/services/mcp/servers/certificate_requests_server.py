@@ -116,60 +116,100 @@ def main():
                             if user_role == "VIEWER":
                                 result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot submit certificate requests."}], "isError": True}
                             else:
+                                from task.services.request_service import RequestService
                                 cert_type = arguments.get("certificate_type")
                                 reason = arguments.get("reason", "")
                                 
-                                req_obj = CertificateRequest.objects.create(
+                                ws_req = RequestService.create_request(
+                                    workspace=workspace,
+                                    requester=user,
+                                    request_type='CERTIFICATE',
+                                    title=f"Certificate Request: {cert_type}",
+                                    description=reason,
+                                    payload={"certificate_type": cert_type, "reason": reason}
+                                )
+                                
+                                # Maintain backwards-compatible legacy record
+                                CertificateRequest.objects.create(
                                     workspace=workspace,
                                     user=user,
                                     certificate_type=cert_type,
                                     description=reason,
                                     status='PENDING'
                                 )
-                                text = f"Successfully created certificate request.\nID: {req_obj.id}\nType: {req_obj.certificate_type}\nStatus: {req_obj.status}"
+                                text = (
+                                    f"Successfully submitted certificate request for organizational approval.\n"
+                                    f"Case Reference ID: {ws_req.display_id}\n"
+                                    f"Type: {cert_type}\n"
+                                    f"Status: SUBMITTED (Awaiting Admin/Owner Review in Review Center)\n"
+                                    f"Reason: {reason or 'Not specified'}"
+                                )
                                 result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name == "list_certificate_requests":
+                            from task.models import WorkspaceRequest
                             if user_role in ['ADMIN', 'OWNER']:
-                                reqs = CertificateRequest.objects.filter(workspace=workspace)
+                                reqs = WorkspaceRequest.objects.filter(workspace=workspace, request_type='CERTIFICATE', is_archived=False)
                             else:
-                                reqs = CertificateRequest.objects.filter(workspace=workspace, user=user)
+                                reqs = WorkspaceRequest.objects.filter(workspace=workspace, requester=user, request_type='CERTIFICATE', is_archived=False)
                             if reqs.exists():
-                                lines = [f"- {r.id}: {r.certificate_type} [{r.status}] (by @{r.user.username})" for r in reqs]
+                                lines = [f"- {r.display_id}: {r.title} [{r.decision_status}] (by @{r.requester.username})" for r in reqs]
                                 text = "Certificate requests:\n" + "\n".join(lines)
                             else:
                                 text = "No certificate requests found."
                             result = {"content": [{"type": "text", "text": text}]}
                         elif tool_name in ["get_certificate_request", "get_certificate_status"]:
+                            from task.models import WorkspaceRequest
                             request_id = arguments.get("request_id")
                             try:
+                                from django.db.models import Q
                                 if user_role in ['ADMIN', 'OWNER']:
-                                    r = CertificateRequest.objects.get(id=request_id, workspace=workspace)
+                                    r = WorkspaceRequest.objects.get(Q(id=request_id) | Q(display_id=request_id), workspace=workspace)
                                 else:
-                                    r = CertificateRequest.objects.get(id=request_id, workspace=workspace, user=user)
-                                text = f"Certificate Request Details:\nID: {r.id}\nType: {r.certificate_type}\nDescription: {r.description}\nStatus: {r.status}\nCreated: {r.created_at.isoformat()}"
-                            except (CertificateRequest.DoesNotExist, ValueError):
-                                text = f"Error: Certificate request with ID '{request_id}' not found."
-                            result = {"content": [{"type": "text", "text": text}]}
-                        elif tool_name == "cancel_certificate_request":
-                            if user_role == "VIEWER":
-                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot cancel certificate requests."}], "isError": True}
-                            else:
-                                request_id = arguments.get("request_id")
+                                    r = WorkspaceRequest.objects.get(Q(id=request_id) | Q(display_id=request_id), workspace=workspace, requester=user)
+                                evidence_info = f"\nEvidence: {json.dumps(r.execution_evidence)}" if r.execution_evidence else ""
+                                text = (
+                                    f"Certificate Request Details:\n"
+                                    f"Display ID: {r.display_id}\n"
+                                    f"Title: {r.title}\n"
+                                    f"Description: {r.description}\n"
+                                    f"Decision Status: {r.decision_status}\n"
+                                    f"Execution Status: {r.execution_status}\n"
+                                    f"Requester: @{r.requester.username}\n"
+                                    f"Created: {r.created_at.isoformat()}"
+                                    f"{evidence_info}"
+                                )
+                            except Exception:
+                                # Fallback search in legacy table
                                 try:
                                     if user_role in ['ADMIN', 'OWNER']:
                                         r = CertificateRequest.objects.get(id=request_id, workspace=workspace)
                                     else:
                                         r = CertificateRequest.objects.get(id=request_id, workspace=workspace, user=user)
-                                        if r.status != 'PENDING':
-                                            return {"content": [{"type": "text", "text": f"Permission Denied: Members can only cancel requests in PENDING status. Current status is '{r.status}'."}], "isError": True}
-                                    
-                                    if r.status in ['PENDING', 'PROCESSING']:
-                                        r.status = 'CANCELLED'
-                                        r.save()
-                                        text = f"Successfully cancelled certificate request {r.id}."
+                                    text = f"Certificate Request Details:\nID: {r.id}\nType: {r.certificate_type}\nDescription: {r.description}\nStatus: {r.status}\nCreated: {r.created_at.isoformat()}"
+                                except Exception:
+                                    text = f"Error: Certificate request with ID '{request_id}' not found."
+                            result = {"content": [{"type": "text", "text": text}]}
+                        elif tool_name == "cancel_certificate_request":
+                            from task.models import WorkspaceRequest
+                            if user_role == "VIEWER":
+                                result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot cancel certificate requests."}], "isError": True}
+                            else:
+                                request_id = arguments.get("request_id")
+                                try:
+                                    from django.db.models import Q
+                                    if user_role in ['ADMIN', 'OWNER']:
+                                        r = WorkspaceRequest.objects.get(Q(id=request_id) | Q(display_id=request_id), workspace=workspace)
                                     else:
-                                        text = f"Cannot cancel request {r.id} because status is {r.status}."
-                                except (CertificateRequest.DoesNotExist, ValueError):
+                                        r = WorkspaceRequest.objects.get(Q(id=request_id) | Q(display_id=request_id), workspace=workspace, requester=user)
+                                    
+                                    if r.decision_status == 'SUBMITTED':
+                                        r.decision_status = 'REJECTED'
+                                        r.decision_reason = "Cancelled by requester."
+                                        r.save()
+                                        text = f"Successfully cancelled certificate request {r.display_id}."
+                                    else:
+                                        text = f"Cannot cancel request {r.display_id} because current decision status is {r.decision_status}."
+                                except Exception:
                                     text = f"Error: Certificate request with ID '{request_id}' not found."
                                 result = {"content": [{"type": "text", "text": text}]}
                         else:

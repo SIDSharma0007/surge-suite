@@ -5,6 +5,7 @@ export const requestServices = {
   retrieve: (id) => api.get(`/requests/${id}/`),
   create: (data) => api.post('/requests/', data),
   archive: (id) => api.post(`/requests/${id}/archive/`),
+  cancel: (id, data = {}) => api.post(`/requests/${id}/cancel/`, data),
 };
 
 export const reviewCenterServices = {
