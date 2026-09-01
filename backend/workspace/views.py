@@ -280,7 +280,13 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             },
             "nvidia_nim": {
                 "display_name": "NVIDIA NIM",
-                "models": ["meta/llama-3.1-8b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"]
+                "models": [
+                    "meta/llama-3.2-11b-vision-instruct",
+                    "meta/llama-3.2-3b-instruct",
+                    "meta/llama-3.2-1b-instruct",
+                    "nvidia/llama-3.1-nemotron-70b-instruct",
+                    "meta/llama-3.3-70b-instruct"
+                ]
             },
             "openclaw": {
                 "display_name": "OpenClaw",
@@ -464,10 +470,30 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                 cred = UserProviderCredential.objects.get(user=request.user, provider=provider_name)
                 resolved_key = decrypt_value(cred.encrypted_api_key)
             except UserProviderCredential.DoesNotExist:
-                return Response(
-                    {"error": f"API key for '{provider_name}' is not configured. Please add it in Provider Settings."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                # Fallback to workspace owner
+                try:
+                    cred = UserProviderCredential.objects.get(user=workspace.owner, provider=provider_name)
+                    resolved_key = decrypt_value(cred.encrypted_api_key)
+                except (UserProviderCredential.DoesNotExist, AttributeError):
+                    resolved_key = None
+
+                # Secondary fallback to workspace Admin
+                if not resolved_key:
+                    admin_memberships = workspace.memberships.filter(role='ADMIN').select_related('user')
+                    for membership in admin_memberships:
+                        try:
+                            cred = UserProviderCredential.objects.get(user=membership.user, provider=provider_name)
+                            resolved_key = decrypt_value(cred.encrypted_api_key)
+                            if resolved_key:
+                                break
+                        except UserProviderCredential.DoesNotExist:
+                            continue
+
+                if not resolved_key:
+                    return Response(
+                        {"error": f"API key for '{provider_name}' is not configured. Please add it in Provider Settings."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             except Exception:
                 return Response(
                     {"error": "Failed to decrypt provider API key."},
@@ -730,10 +756,34 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         item = get_object_or_404(WorkspaceContextItem, workspace=workspace, id=context_id)
 
         # Check permissions: item creator, workspace ADMIN, or OWNER (VIEWER blocked)
+        is_owner = workspace.owner == request.user
         is_creator = item.creator == request.user
-        is_admin_or_owner = workspace.owner == request.user or workspace.memberships.filter(user=request.user, role='ADMIN').exists()
-        is_viewer = workspace.owner != request.user and workspace.memberships.filter(user=request.user, role='VIEWER').exists()
-        if is_viewer or (not is_creator and not is_admin_or_owner):
+        user_membership = workspace.memberships.filter(user=request.user).first()
+        user_role = 'OWNER' if is_owner else (user_membership.role if user_membership else 'VIEWER')
+
+        if user_role == 'VIEWER':
+            return Response(
+                {"error": "Permission Denied: Read-only VIEWER role cannot delete context items."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Check item creator role: only OWNER can delete OWNER-created files
+        item_creator_is_owner = (item.creator == workspace.owner)
+        if item_creator_is_owner and not is_owner:
+            return Response(
+                {"error": "Permission Denied: Only the workspace OWNER can delete items created/uploaded by the OWNER."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        item_creator_membership = workspace.memberships.filter(user=item.creator).first() if item.creator else None
+        item_creator_is_admin = (item_creator_membership and item_creator_membership.role == 'ADMIN')
+        if item_creator_is_admin and not is_owner and not is_creator:
+            return Response(
+                {"error": "Permission Denied: Only the admin creator or workspace OWNER can delete this item."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if not is_owner and not is_creator and user_role != 'ADMIN':
             return Response(
                 {"error": "Permission Denied: Only the creator, workspace ADMIN, or OWNER can delete this context item."},
                 status=status.HTTP_403_FORBIDDEN

@@ -117,8 +117,8 @@ def main():
                                 result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot submit certificate requests."}], "isError": True}
                             else:
                                 from task.services.request_service import RequestService
-                                cert_type = arguments.get("certificate_type")
-                                reason = arguments.get("reason", "")
+                                cert_type = arguments.get("certificate_type") or "Bonafide Certificate"
+                                reason = arguments.get("reason") or "Academic / Institutional Purpose"
                                 
                                 ws_req = RequestService.create_request(
                                     workspace=workspace,

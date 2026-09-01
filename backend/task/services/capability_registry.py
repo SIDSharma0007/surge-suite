@@ -335,31 +335,6 @@ class CapabilityRegistry:
         REQUIRES_APPROVAL → raise ApprovalRequiredException (caller must pause)
         BLOCKED           → raise PermissionDenied (permanently rejected)
         """
-        resolved_user = user or self.user
-        if not resolved_user and task and hasattr(task, 'creator'):
-            resolved_user = task.creator
-        resolved_workspace = workspace or self.workspace
-        if not resolved_workspace and task and hasattr(task, 'workspace'):
-            resolved_workspace = task.workspace
-
-        if resolved_user and resolved_workspace:
-            # Check if this is a Django model instance with memberships
-            is_owner = getattr(resolved_workspace, 'owner', None) == resolved_user
-            if is_owner:
-                user_role = "OWNER"
-            elif hasattr(resolved_workspace, 'memberships') and hasattr(resolved_workspace.memberships, 'filter'):
-                try:
-                    role_val = resolved_workspace.memberships.filter(user=resolved_user).values_list('role', flat=True).first()
-                    user_role = role_val if isinstance(role_val, str) else "OWNER"
-                except Exception:
-                    user_role = "OWNER"
-            else:
-                user_role = "OWNER"
-
-            if user_role not in ["ADMIN", "OWNER"]:
-                raise PermissionDenied(f"Permission Denied: Users with role '{user_role}' are not authorized to execute shell commands. ADMIN or OWNER role is required.")
-
-
         command_clean = args.get("command", "").strip()
 
         tier = self._classify_command(command_clean)

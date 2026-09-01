@@ -10,8 +10,11 @@ import {
   Trash, 
   X,
   Tag,
-  ChevronDown
+  ChevronDown,
+  Lock
 } from 'lucide-react';
+import { canEditNote, canDeleteNote } from '../../utils/notesPermissions';
+import { formatShortName } from '../../utils/formatUser';
 
 const COLORS_MAP = {
   default: 'var(--border-medium)',
@@ -22,6 +25,68 @@ const COLORS_MAP = {
   blue: '#3b82f6',
   indigo: '#6366f1',
   violet: '#8b5cf6'
+};
+
+const renderAuthorBadge = (note, isEditable = true) => {
+  const role = note?.author?.role || 'MEMBER';
+  const rawUsername = note?.author?.username || note?.author?.displayName || 'Member';
+  const shortName = formatShortName(note?.author?.username, note?.author?.displayName);
+  
+  if (role === 'OWNER') {
+    return (
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '3px',
+        padding: '2px 6px',
+        borderRadius: 'var(--radius-full)',
+        fontSize: '10px',
+        fontWeight: '600',
+        background: 'rgba(168, 85, 247, 0.12)',
+        color: '#c084fc',
+        border: '1px solid rgba(168, 85, 247, 0.25)',
+        whiteSpace: 'nowrap'
+      }} title={`Added by Owner: ${rawUsername}${!isEditable ? ' (Protected)' : ''}`}>
+        {!isEditable ? '🔒' : '👑'} Owner ({shortName})
+      </span>
+    );
+  }
+  if (role === 'ADMIN') {
+    return (
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '3px',
+        padding: '2px 6px',
+        borderRadius: 'var(--radius-full)',
+        fontSize: '10px',
+        fontWeight: '600',
+        background: 'rgba(59, 130, 246, 0.12)',
+        color: '#60a5fa',
+        border: '1px solid rgba(59, 130, 246, 0.25)',
+        whiteSpace: 'nowrap'
+      }} title={`Added by Admin: ${rawUsername}${!isEditable ? ' (Protected)' : ''}`}>
+        {!isEditable ? '🔒' : '🛡️'} Admin ({shortName})
+      </span>
+    );
+  }
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '3px',
+      padding: '2px 6px',
+      borderRadius: 'var(--radius-full)',
+      fontSize: '10px',
+      fontWeight: '600',
+      background: 'rgba(34, 197, 94, 0.12)',
+      color: '#4ade80',
+      border: '1px solid rgba(34, 197, 94, 0.25)',
+      whiteSpace: 'nowrap'
+    }} title={`Added by Member: ${rawUsername}${!isEditable ? ' (Protected)' : ''}`}>
+      {!isEditable ? '🔒' : '👤'} Member ({shortName})
+    </span>
+  );
 };
 
 export default function NotesSidebar({
@@ -40,7 +105,9 @@ export default function NotesSidebar({
   selectedTag,
   setSelectedTag,
   viewMode,
-  setViewMode
+  setViewMode,
+  currentUser,
+  userRole
 }) {
   const [showTagDropdown, setShowTagDropdown] = useState(false);
 
@@ -205,6 +272,8 @@ export default function NotesSidebar({
             const noteColor = COLORS_MAP[note.color || 'default'];
             const plainExcerpt = getPlainText(note.body);
             const daysLeft = getRemainingDays(note.deletedAt);
+            const isEditable = canEditNote(note, userRole, currentUser);
+            const isDeletable = canDeleteNote(note, userRole, currentUser);
 
             return (
               <div 
@@ -226,25 +295,36 @@ export default function NotesSidebar({
                   </span>
                   
                   {filterTab === 'all' ? (
-                    note.isPinned && (
-                      <Pin size={12} style={{ color: 'var(--text-primary)', fill: 'currentColor' }} />
-                    )
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      {renderAuthorBadge(note, isEditable)}
+                      {note.isPinned && (
+                        <Pin size={12} style={{ color: 'var(--text-primary)', fill: 'currentColor' }} />
+                      )}
+                    </div>
                   ) : (
                     <div className="notes-sidebar-item-bin-actions" onClick={(e) => e.stopPropagation()}>
-                      <button 
-                        onClick={() => onRestoreNote(note.id)} 
-                        className="notes-sidebar-item-action-btn"
-                        title="Restore Note"
-                      >
-                        <RotateCcw size={12} />
-                      </button>
-                      <button 
-                        onClick={() => onPermanentlyDeleteNote(note.id)} 
-                        className="notes-sidebar-item-action-btn delete-btn"
-                        title="Delete Permanently"
-                      >
-                        <X size={12} />
-                      </button>
+                      {isDeletable ? (
+                        <>
+                          <button 
+                            onClick={() => onRestoreNote(note.id)} 
+                            className="notes-sidebar-item-action-btn"
+                            title="Restore Note"
+                          >
+                            <RotateCcw size={12} />
+                          </button>
+                          <button 
+                            onClick={() => onPermanentlyDeleteNote(note.id)} 
+                            className="notes-sidebar-item-action-btn delete-btn"
+                            title="Delete Permanently"
+                          >
+                            <X size={12} />
+                          </button>
+                        </>
+                      ) : (
+                        <span title="Only note author or owner can manage this deleted note" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                          🔒
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>

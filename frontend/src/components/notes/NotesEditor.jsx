@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Pin, Trash2, X } from 'lucide-react';
+import { Pin, Trash2, X, Lock, ShieldAlert } from 'lucide-react';
 import NotesToolbar from './NotesToolbar';
 import NotesStatusBar from './NotesStatusBar';
+import { canEditNote, canDeleteNote } from '../../utils/notesPermissions';
+import { formatShortName } from '../../utils/formatUser';
 
 const PLACEHOLDERS = [
   "What's on your mind...",
@@ -32,7 +34,7 @@ const COLORS_PICK = [
   { id: 'violet', color: '#8b5cf6', label: 'Violet' }
 ];
 
-export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete }) {
+export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete, currentUser, userRole }) {
   const editorRef = useRef(null);
   const [tagInput, setTagInput] = useState('');
 
@@ -128,6 +130,10 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete }) {
     onUpdate({ ...note, tags: currentTags.filter(t => t !== tagToRemove) });
   };
 
+  // Permission checks
+  const isEditable = canEditNote(note, userRole, currentUser);
+  const isDeletable = canDeleteNote(note, userRole, currentUser);
+
   // Resolve accent color
   const activeColorObject = COLORS_PICK.find(c => c.id === (note.color || 'default'));
   const accentColor = activeColorObject?.id === 'default' ? 'transparent' : activeColorObject?.color;
@@ -149,95 +155,165 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete }) {
             placeholder="Title"
             value={note.title || ''}
             onChange={handleTitleChange}
+            disabled={!isEditable}
+            style={{
+              cursor: !isEditable ? 'not-allowed' : 'text',
+              opacity: !isEditable ? 0.85 : 1
+            }}
             aria-label="Note Title"
           />
           
           <div style={styles.headerControls}>
-            {/* VIBGYOR Color Picker */}
-            <div className="notes-color-picker-container">
-              {COLORS_PICK.map(c => (
-                <div
-                  key={c.id}
-                  onClick={() => onUpdate({ ...note, color: c.id })}
-                  className={`notes-color-picker-dot ${note.color === c.id || (!note.color && c.id === 'default') ? 'active' : ''}`}
-                  style={{ 
-                    backgroundColor: c.id === 'default' ? 'transparent' : c.color,
-                    borderColor: c.id === 'default' ? 'var(--border-medium)' : 'transparent'
-                  }}
-                  title={c.label}
-                />
-              ))}
-            </div>
+            {/* VIBGYOR Color Picker (Only editable if allowed) */}
+            {isEditable && (
+              <div className="notes-color-picker-container">
+                {COLORS_PICK.map(c => (
+                  <div
+                    key={c.id}
+                    onClick={() => onUpdate({ ...note, color: c.id })}
+                    className={`notes-color-picker-dot ${note.color === c.id || (!note.color && c.id === 'default') ? 'active' : ''}`}
+                    style={{ 
+                      backgroundColor: c.id === 'default' ? 'transparent' : c.color,
+                      borderColor: c.id === 'default' ? 'var(--border-medium)' : 'transparent'
+                    }}
+                    title={c.label}
+                  />
+                ))}
+              </div>
+            )}
 
-            {/* Pin Action */}
-            <button
-              onClick={() => onTogglePin(note.id)}
-              style={styles.headerBtn}
-              title={note.isPinned ? "Unpin Note" : "Pin Note"}
-              className="pin-btn-hover"
-            >
-              <Pin 
-                size={16} 
-                style={{ 
-                  color: note.isPinned ? 'var(--text-primary)' : 'var(--text-muted)',
-                  fill: note.isPinned ? 'currentColor' : 'transparent',
-                  transition: 'var(--transition-all)'
-                }} 
-              />
-            </button>
+            {/* Pin Action (Only editable if allowed) */}
+            {isEditable && (
+              <button
+                onClick={() => onTogglePin(note.id)}
+                style={styles.headerBtn}
+                title={note.isPinned ? "Unpin Note" : "Pin Note"}
+                className="pin-btn-hover"
+              >
+                <Pin 
+                  size={16} 
+                  style={{ 
+                    color: note.isPinned ? 'var(--text-primary)' : 'var(--text-muted)',
+                    fill: note.isPinned ? 'currentColor' : 'transparent',
+                    transition: 'var(--transition-all)'
+                  }} 
+                />
+              </button>
+            )}
 
             {/* Trash Action */}
-            <button
-              onClick={() => onDelete(note.id)}
-              style={styles.headerBtn}
-              title="Move to Bin"
-              className="pin-btn-hover"
-            >
-              <Trash2 size={16} style={{ color: 'var(--text-muted)' }} />
-            </button>
+            {isDeletable && (
+              <button
+                onClick={() => onDelete(note.id)}
+                style={styles.headerBtn}
+                title="Move to Bin"
+                className="pin-btn-hover"
+              >
+                <Trash2 size={16} style={{ color: 'var(--text-muted)' }} />
+              </button>
+            )}
           </div>
         </div>
+
+        {/* Author & Timestamp Attribution Banner */}
+        {(() => {
+          const authorRole = note?.author?.role || 'MEMBER';
+          const rawAuthorUsername = note?.author?.username || note?.author?.displayName || 'Member';
+          const authorShort = formatShortName(note?.author?.username, note?.author?.displayName);
+          const createdDate = note?.createdAt || note?.updatedAt;
+          const formattedCreated = createdDate ? new Date(createdDate).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+          const lastEditedUsername = note?.lastEditedBy?.username;
+          const lastEditedShort = formatShortName(lastEditedUsername, note?.lastEditedBy?.displayName);
+          const lastEditedRole = note?.lastEditedBy?.role;
+
+          return (
+            <div style={styles.authorBanner}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Created by:</span>
+                <span 
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)',
+                    fontSize: '11px',
+                    fontWeight: '600',
+                    background: authorRole === 'OWNER' ? 'rgba(168, 85, 247, 0.12)' : authorRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(34, 197, 94, 0.12)',
+                    color: authorRole === 'OWNER' ? '#c084fc' : authorRole === 'ADMIN' ? '#60a5fa' : '#4ade80',
+                    border: `1px solid ${authorRole === 'OWNER' ? 'rgba(168, 85, 247, 0.25)' : authorRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(34, 197, 94, 0.25)'}`
+                  }}
+                  title={`Added by: ${rawAuthorUsername}`}
+                >
+                  {authorRole === 'OWNER' ? '👑 Owner' : authorRole === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({authorShort})
+                </span>
+                {formattedCreated && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>on {formattedCreated}</span>
+                )}
+                {lastEditedUsername && lastEditedUsername !== rawAuthorUsername && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }} title={`Last edited by: ${lastEditedUsername}`}>
+                    • Last edited by <strong>{lastEditedRole === 'OWNER' ? '👑 Owner' : lastEditedRole === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({lastEditedShort})</strong>
+                  </span>
+                )}
+              </div>
+
+              {!isEditable && (
+                <div style={styles.protectedNotice}>
+                  <Lock size={12} style={{ marginRight: '5px', color: '#f59e0b', flexShrink: 0 }} />
+                  <span>
+                    <strong>Protected Note:</strong> Authored by {authorRole === 'OWNER' ? `👑 Workspace Owner (${authorShort})` : `${authorRole} (${authorShort})`}. Only authorized roles can edit or delete this note.
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Tag chips input row */}
         <div className="notes-editor-tags-container">
           {note.tags && note.tags.map(tag => (
             <span key={tag} className="notes-editor-tag-chip">
               {tag}
-              <button 
-                onClick={() => handleRemoveTag(tag)} 
-                className="notes-editor-tag-delete-btn"
-                title={`Remove ${tag}`}
-              >
-                <X size={10} />
-              </button>
+              {isEditable && (
+                <button 
+                  onClick={() => handleRemoveTag(tag)} 
+                  className="notes-editor-tag-delete-btn"
+                  title={`Remove ${tag}`}
+                >
+                  <X size={10} />
+                </button>
+              )}
             </span>
           ))}
-          <input
-            type="text"
-            placeholder="+ Add tag..."
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            onKeyDown={handleAddTag}
-            className="notes-editor-tag-input"
-          />
+          {isEditable && (
+            <input
+              type="text"
+              placeholder="+ Add tag..."
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={handleAddTag}
+              className="notes-editor-tag-input"
+            />
+          )}
         </div>
         
         <div
           ref={editorRef}
           className="notes-body-editable"
-          contentEditable={true}
+          contentEditable={isEditable}
           onInput={handleInput}
           placeholder={bodyPlaceholder}
           aria-label="Note Body"
-          style={{ outline: 'none', marginTop: '12px' }}
+          style={{ 
+            outline: 'none', 
+            marginTop: '12px',
+            cursor: !isEditable ? 'default' : 'text'
+          }}
         />
       </div>
       
-      {/* Floating Rich-Text Toolbar */}
-      <NotesToolbar onFormat={handleFormatAction} />
+      {/* Floating Rich-Text Toolbar (Only when editable) */}
+      {isEditable && <NotesToolbar onFormat={handleFormatAction} />}
       
       {/* Dynamic Status Bar */}
-      <NotesStatusBar bodyText={note.body} />
+      <NotesStatusBar bodyText={note.body} author={note.author} updatedAt={note.updatedAt} />
     </div>
   );
 }
@@ -252,6 +328,26 @@ const styles = {
     borderBottom: '1px solid var(--border-light)',
     marginBottom: '4px',
     paddingLeft: '48px' // Leave spacing for library toggle menu button
+  },
+  authorBanner: {
+    padding: '4px 0 8px 48px',
+    borderBottom: '1px dashed var(--border-light)',
+    marginBottom: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px'
+  },
+  protectedNotice: {
+    display: 'flex',
+    alignItems: 'center',
+    fontSize: '11px',
+    color: 'var(--text-secondary)',
+    background: 'rgba(245, 158, 11, 0.08)',
+    border: '1px solid rgba(245, 158, 11, 0.25)',
+    borderRadius: 'var(--radius-sm)',
+    padding: '4px 8px',
+    marginTop: '4px',
+    width: 'fit-content'
   },
   headerControls: {
     display: 'flex',

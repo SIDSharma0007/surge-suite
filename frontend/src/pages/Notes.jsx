@@ -16,7 +16,9 @@ export default function Notes({
   onDeleteNote,
   onRestoreNote,
   onPermanentlyDeleteNote,
-  onEmptyBin
+  onEmptyBin,
+  currentUser,
+  userRole = 'MEMBER'
 }) {
   const [showLibrary, setShowLibrary] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -47,6 +49,8 @@ export default function Notes({
           setSelectedTag={setSelectedTag}
           viewMode={viewMode}
           setViewMode={setViewMode}
+          currentUser={currentUser}
+          userRole={userRole}
         />
       )}
 
@@ -71,6 +75,8 @@ export default function Notes({
             onUpdate={onUpdateNote}
             onTogglePin={onTogglePin}
             onDelete={onDeleteNote}
+            currentUser={currentUser}
+            userRole={userRole}
           />
         ) : (
           <EmptyNotesState onCreateNote={onNewNote} />

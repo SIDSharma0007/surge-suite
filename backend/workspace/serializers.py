@@ -26,19 +26,28 @@ class WorkspaceSkillSerializer(serializers.ModelSerializer):
 
 class WorkspaceContextItemSerializer(serializers.ModelSerializer):
     creator = UserSerializer(read_only=True)
+    creator_role = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkspaceContextItem
         fields = [
-            'id', 'workspace', 'creator', 'name', 'context_type', 'source_type',
+            'id', 'workspace', 'creator', 'creator_role', 'name', 'context_type', 'source_type',
             'raw_file', 'original_filename', 'mime_type', 'content_hash', 'file_size',
             'normalized_content', 'is_active', 'is_archived', 'metadata',
             'verification_metadata', 'created_at', 'updated_at'
         ]
         read_only_fields = [
-            'id', 'workspace', 'creator', 'original_filename', 'mime_type',
+            'id', 'workspace', 'creator', 'creator_role', 'original_filename', 'mime_type',
             'content_hash', 'file_size', 'created_at', 'updated_at'
         ]
+
+    def get_creator_role(self, obj):
+        if not obj.creator:
+            return None
+        if obj.workspace.owner == obj.creator:
+            return 'OWNER'
+        membership = obj.workspace.memberships.filter(user=obj.creator).first()
+        return membership.role if membership else 'MEMBER'
 
 class WorkspaceSerializer(serializers.ModelSerializer):
     owner = UserSerializer(read_only=True)

@@ -178,18 +178,36 @@ def main():
                                     else:
                                         time_slot_desc = f"{start_t.strftime('%H:%M')} - {end_t.strftime('%H:%M')}"
                                         formatted_date = target_date.isoformat()
+
+                                        # Check for overlapping confirmed bookings on the same date and laboratory
+                                        conflicts = LaboratoryBooking.objects.filter(
+                                            workspace=workspace,
+                                            lab_name__iexact=lab_name,
+                                            date=target_date,
+                                            status='CONFIRMED',
+                                            start_time__lt=end_t,
+                                            end_time__gt=start_t
+                                        )
+                                        conflict_warning = ""
+                                        if conflicts.exists():
+                                            c_slots = [f"{c.start_time.strftime('%H:%M')}-{c.end_time.strftime('%H:%M')}" for c in conflicts]
+                                            conflict_warning = f" [WARNING: Overlaps with confirmed slot(s): {', '.join(c_slots)}]"
+
+                                        desc_text = f"Booking slot request for {lab_name} on {formatted_date} from {time_slot_desc}.{conflict_warning}"
+
                                         ws_req = RequestService.create_request(
                                             workspace=workspace,
                                             requester=user,
                                             request_type='LAB_BOOKING',
                                             title=f"Lab Booking: {lab_name} ({formatted_date})",
-                                            description=f"Booking slot request for {lab_name} on {formatted_date} from {time_slot_desc}.",
+                                            description=desc_text,
                                             payload={
                                                 "laboratory": lab_name,
                                                 "date": formatted_date,
                                                 "time_slot": time_slot_desc,
                                                 "start_time": start_t.strftime("%H:%M"),
-                                                "end_time": end_t.strftime("%H:%M")
+                                                "end_time": end_t.strftime("%H:%M"),
+                                                "has_conflict": conflicts.exists()
                                             }
                                         )
                                         
@@ -201,7 +219,7 @@ def main():
                                             date=target_date,
                                             start_time=start_t,
                                             end_time=end_t,
-                                            status='CONFIRMED'
+                                            status='PENDING' if conflicts.exists() else 'CONFIRMED'
                                         )
                                         text = (
                                             f"Successfully submitted laboratory booking request for institutional authorization.\n"
@@ -210,6 +228,7 @@ def main():
                                             f"Date: {formatted_date}\n"
                                             f"Time Slot: {time_slot_desc}\n"
                                             f"Status: SUBMITTED (Awaiting Admin/Owner Review in Review Center)"
+                                            + (f"\nNotice: {conflict_warning.strip()}" if conflict_warning else "")
                                         )
                                 except Exception as ex:
                                     text = f"Error: Invalid date/time formatting '{date_str}', '{start_str}', '{end_str}': {str(ex)}"

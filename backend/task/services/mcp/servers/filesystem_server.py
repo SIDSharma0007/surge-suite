@@ -63,9 +63,19 @@ def main():
                     else:
                         try:
                             items = os.listdir(target_path)
-                            files = [i for i in items if os.path.isfile(os.path.join(target_path, i))]
-                            dirs = [i for i in items if os.path.isdir(os.path.join(target_path, i))]
-                            text = f"Files: {', '.join(files)}\nDirectories: {', '.join(dirs)}"
+                            
+                            # Exclude sensitive system files, secrets, database files, and internal virtual environments
+                            sensitive_terms = [".env", "settings.py", "secret", "credential", "token", "password", "key", ".sqlite3", ".db", ".git"]
+                            ignored_dirs = ["venv", "__pycache__", ".git", ".surge", "node_modules", ".gemini"]
+
+                            def is_sensitive(name):
+                                name_lower = name.lower()
+                                return any(st in name_lower for st in sensitive_terms)
+
+                            files = [i for i in items if os.path.isfile(os.path.join(target_path, i)) and not is_sensitive(i)]
+                            dirs = [i for i in items if os.path.isdir(os.path.join(target_path, i)) and i.lower() not in ignored_dirs and not is_sensitive(i)]
+                            
+                            text = f"Files: {', '.join(files) if files else '(none)'}\nDirectories: {', '.join(dirs) if dirs else '(none)'}"
                             result = {"content": [{"type": "text", "text": text}]}
                         except Exception as ex:
                             result = {"content": [{"type": "text", "text": f"Error reading path: {str(ex)}"}], "isError": True}

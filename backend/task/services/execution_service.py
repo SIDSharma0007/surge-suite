@@ -44,16 +44,17 @@ class ExecutionService:
 
     def _mcp_tool_directly_satisfies(self, tool_name: str, tool_description: str, task_statement: str) -> bool:
         statement_lower = task_statement.lower()
+        from .multilingual_prompt import matches_domain_intent
         
         server_name = tool_name.split(".")[0] if "." in tool_name else ""
         if server_name == "certificate_requests":
-            return any(k in statement_lower for k in ["certificate", "cert"])
+            return matches_domain_intent("certificate", task_statement)
         if server_name == "maintenance_tickets":
-            return any(k in statement_lower for k in ["maintenance", "ticket", "room", "facility", "broken", "leak", "repair", "fix"])
+            return matches_domain_intent("maintenance", task_statement)
         if server_name == "laboratory_bookings":
-            return any(k in statement_lower for k in ["laboratory", "lab", "booking", "book"])
+            return matches_domain_intent("laboratory", task_statement)
         if server_name == "grievance_escalation":
-            return any(k in statement_lower for k in ["grievance", "complaint", "escalate", "escalation"])
+            return matches_domain_intent("grievance", task_statement)
 
         if tool_name == "filesystem.list_directory":
             # list_directory is suitable if task asks to list, show, inspect files/directories,
@@ -101,12 +102,22 @@ class ExecutionService:
             return [cfg["name"] for cfg in MCP_SERVER_CONFIGS]
 
         from .mcp.registry import get_all_configs
+        from .multilingual_prompt import detect_language
+        detected_lang = detect_language(task_statement)
+        is_non_english = detected_lang != 'english'
+
         configs = get_all_configs(user)
         required_servers = []
         for cfg in configs:
             if not cfg.get("is_enabled", True):
                 continue
             name = cfg["name"]
+
+            # If prompt is non-English, ensure all institutional MCP servers are provided
+            if is_non_english and name in ["certificate_requests", "maintenance_tickets", "laboratory_bookings", "grievance_escalation", "filesystem"]:
+                required_servers.append(name)
+                continue
+
             tools = cfg.get("tools", [])
             is_relevant = False
             for t in tools:
@@ -128,12 +139,13 @@ class ExecutionService:
     def _determine_external_state_requirement(self, task_statement: str, available_tools_info: list) -> bool:
         """
         Lightweight, tool-driven determination of whether a task requires external state execution.
-        Inspects available tool descriptions, names, and action verbs against the task statement.
+        Inspects available tool descriptions, names, and action verbs against the task statement across all 13 languages.
         """
         if not available_tools_info or not task_statement:
             return False
             
         statement_lower = task_statement.lower()
+        from .multilingual_prompt import matches_domain_intent, detect_language
 
         # Check for explicit filesystem, workspace inspection, or file inquiry
         filesystem_intents = [
@@ -166,19 +178,13 @@ class ExecutionService:
                 if re.search(pattern, statement_lower):
                     return True
 
-        # Check for explicit institutional request / booking / ticket / grievance intents
+        # Check for institutional domain intents across all 13 languages
         has_request_tool = any(any(k in t.get("name", "").lower() for k in ["certificate", "maintenance", "laborator", "grievance", "requests"]) for t in available_tools_info)
         if has_request_tool:
-            request_intents = [
-                r"\b(certificate|cert|bonafide|migration|character certificate|transfer certificate)\b",
-                r"\b(maintenance|repair|leak|broken|fix|ticket|plumbing|electrical|hvac)\b",
-                r"\b(book|booking|slot|laboratory|lab)\b",
-                r"\b(grievance|complaint|escalate|escalation)\b",
-                r"\b(submit request|create request|my request|request details)\b",
-            ]
-            for pattern in request_intents:
-                if re.search(pattern, statement_lower):
-                    return True
+            if any(matches_domain_intent(d, task_statement) for d in ["certificate", "maintenance", "laboratory", "grievance"]):
+                return True
+            if detect_language(task_statement) != 'english':
+                return True
 
         return False
 
@@ -539,6 +545,18 @@ class ExecutionService:
                         resolved_key = decrypt_value(cred.encrypted_api_key)
                     except (UserProviderCredential.DoesNotExist, AttributeError):
                         resolved_key = None
+
+                    # Secondary fallback to workspace Admin's configured provider key
+                    if not resolved_key:
+                        admin_memberships = task.workspace.memberships.filter(role='ADMIN').select_related('user')
+                        for membership in admin_memberships:
+                            try:
+                                cred = UserProviderCredential.objects.get(user=membership.user, provider=provider_name.lower())
+                                resolved_key = decrypt_value(cred.encrypted_api_key)
+                                if resolved_key:
+                                    break
+                            except UserProviderCredential.DoesNotExist:
+                                continue
                     
                 if not resolved_key:
                     # Key is missing!
@@ -722,6 +740,7 @@ class ExecutionService:
             "- Always cite the source document name in your answer when referencing institutional facts.\n\n"
             "HUMAN-IN-THE-LOOP & INSTITUTIONAL REQUEST WORKFLOW RULES:\n"
             "- When a user task asks you to create, submit, or book something requiring organizational authorization (such as a certificate, maintenance work order, laboratory slot booking, grievance, or official request), you MUST invoke the appropriate request creation tool (e.g. certificate_requests.create_certificate_request, maintenance_tickets.create_maintenance_ticket, laboratory_bookings.create_lab_booking, grievance_escalation.create_grievance, or requests.create_request).\n"
+            "- MULTILINGUAL & INDIC PROMPTS (Hindi, Bengali, Odia, etc.): When the user's task is in Hindi or any non-English language (e.g. 'मेरे लिए एक बर्थ सर्टिफिकेट बनवाओ', 'लैब स्लॉट बुक करो', 'कमरे का पंखा खराब है', 'complaint दर्ज करो'), you MUST recognize the request intent, construct standard arguments, and call the appropriate tool in your first step.\n"
             "- The request will be submitted to the workspace institutional review queue in 'SUBMITTED' state.\n"
             "- In your final answer, clearly inform the user of the generated Case Reference ID (e.g. `REQ-2026-000001`), summarize what was submitted, state that it is currently awaiting review by an authorized Workspace Admin or Owner in the Review Center, and let them know they can track its status in the 'My Requests' tab.\n"
             "- Do NOT claim that an unapproved request is already completed, issued, or dispatched; always state that it is submitted and awaiting review.\n"
@@ -1423,7 +1442,28 @@ class ExecutionService:
                     )
                     resolved_key = decrypt_value(cred.encrypted_api_key)
                 except UserProviderCredential.DoesNotExist:
-                    resolved_key = None
+                    # Fallback to workspace owner
+                    try:
+                        cred = UserProviderCredential.objects.get(
+                            user=task.workspace.owner, provider=provider_name.lower()
+                        )
+                        resolved_key = decrypt_value(cred.encrypted_api_key)
+                    except (UserProviderCredential.DoesNotExist, AttributeError):
+                        resolved_key = None
+
+                    # Secondary fallback to workspace Admin
+                    if not resolved_key:
+                        admin_memberships = task.workspace.memberships.filter(role='ADMIN').select_related('user')
+                        for membership in admin_memberships:
+                            try:
+                                cred = UserProviderCredential.objects.get(
+                                    user=membership.user, provider=provider_name.lower()
+                                )
+                                resolved_key = decrypt_value(cred.encrypted_api_key)
+                                if resolved_key:
+                                    break
+                            except UserProviderCredential.DoesNotExist:
+                                continue
         else:
             model_provider = self.provider
             is_real = not isinstance(self.provider, FakeModelProvider)

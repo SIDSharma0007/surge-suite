@@ -39,8 +39,9 @@ class RealGeminiModelProvider(ModelProvider):
                 "parts": [{"text": system_instruction}]
             }
 
+        timeout_sec = getattr(settings, 'LLM_REQUEST_TIMEOUT', 90)
         try:
-            response = requests.post(url, json=data, headers=headers, timeout=30)
+            response = requests.post(url, json=data, headers=headers, timeout=timeout_sec)
             if response.status_code == 200:
                 res_data = response.json()
                 text = res_data['candidates'][0]['content']['parts'][0]['text']
@@ -73,8 +74,9 @@ class OpenAICompatibleModelProvider(ModelProvider):
             "model": model or self.default_model,
             "messages": messages
         }
+        timeout_sec = getattr(settings, 'LLM_REQUEST_TIMEOUT', 90)
         try:
-            response = requests.post(url, json=data, headers=headers, timeout=30)
+            response = requests.post(url, json=data, headers=headers, timeout=timeout_sec)
             if response.status_code == 200:
                 res_data = response.json()
                 text = res_data['choices'][0]['message']['content']

@@ -115,7 +115,7 @@ else:
         "default": {
             "ENGINE": "django.db.backends.postgresql",
             "NAME": config("DB_NAME", default="surge_suite"),
-            "USER": config("DB_USER", default=""),
+            "USER": config("DB_USER", default="postgres"),
             "PASSWORD": config("DB_PASSWORD", default=""),
             "HOST": config("DB_HOST", default="localhost"),
             "PORT": config("DB_PORT", default="5432", cast=int),
@@ -186,6 +186,7 @@ CSRF_TRUSTED_ORIGINS = config(
 ).split(",")
 
 # AI Provider Settings
+LLM_REQUEST_TIMEOUT = config("LLM_REQUEST_TIMEOUT", default=90, cast=int)
 NVIDIA_NIM_BASE_URL = config("NVIDIA_NIM_BASE_URL", default="https://integrate.api.nvidia.com/v1")
 NVIDIA_NIM_DEFAULT_MODEL = config("NVIDIA_NIM_DEFAULT_MODEL", default="meta/llama-3.2-11b-vision-instruct")
 GROQ_BASE_URL = config("GROQ_BASE_URL", default="https://api.groq.com/openai/v1")

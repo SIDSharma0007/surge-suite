@@ -66,12 +66,12 @@ class ApprovalService:
             approval.save()
             raise ApprovalValidationError("Approval request has expired.")
 
-        # Resolving user must have workspace access
+        # Resolving user must have workspace ADMIN or OWNER authorization
         workspace = approval.workspace
         if workspace.owner != resolving_user:
-            if not workspace.memberships.filter(user=resolving_user).exists():
+            if not workspace.memberships.filter(user=resolving_user, role='ADMIN').exists():
                 raise ApprovalValidationError(
-                    "You do not have access to this workspace."
+                    "You do not have access: Only workspace ADMIN or OWNER can resolve execution approval requests."
                 )
 
         return approval

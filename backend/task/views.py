@@ -126,7 +126,22 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         # Execute synchronously using service layer
         execution_service = ExecutionService()
-        execution = execution_service.execute_task(task, user=request.user)
+        try:
+            execution = execution_service.execute_task(task, user=request.user)
+        except Exception as e:
+            task.status = 'FAILED'
+            task.result = f"Execution error: {str(e)}"
+            task.save()
+            from .models import ExecutionEvent
+            ExecutionEvent.objects.create(
+                task=task,
+                event_type='EXECUTION_FAILED',
+                metadata={'error': str(e)}
+            )
+            return Response(
+                {"error": f"Execution failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
         # Refresh task from DB to pick up latest state
         task.refresh_from_db()
@@ -188,15 +203,14 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = get_object_or_404(Task, id=pk)
         self.check_object_permissions(request, task)
 
-        # Only task creator, workspace ADMIN, or OWNER can approve commands
+        # Only workspace ADMIN or OWNER can approve commands
         is_authorized = (
-            request.user == task.creator
-            or task.workspace.owner == request.user
+            task.workspace.owner == request.user
             or task.workspace.memberships.filter(user=request.user, role='ADMIN').exists()
         )
         if not is_authorized:
             return Response(
-                {"error": "Permission Denied: Only the task creator, workspace ADMIN, or OWNER can authorize execution requests."},
+                {"error": "Permission Denied: Only workspace ADMIN or OWNER can authorize execution requests."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -251,15 +265,14 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = get_object_or_404(Task, id=pk)
         self.check_object_permissions(request, task)
 
-        # Only task creator, workspace ADMIN, or OWNER can deny commands
+        # Only workspace ADMIN or OWNER can deny commands
         is_authorized = (
-            request.user == task.creator
-            or task.workspace.owner == request.user
+            task.workspace.owner == request.user
             or task.workspace.memberships.filter(user=request.user, role='ADMIN').exists()
         )
         if not is_authorized:
             return Response(
-                {"error": "Permission Denied: Only the task creator, workspace ADMIN, or OWNER can authorize execution requests."},
+                {"error": "Permission Denied: Only workspace ADMIN or OWNER can authorize execution requests."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
