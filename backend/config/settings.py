@@ -24,10 +24,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config("SECRET_KEY")
 
 import sys
+from cryptography.fernet import Fernet
+
 TESTING = len(sys.argv) > 1 and sys.argv[1] == 'test'
 PROVIDER_CREDENTIAL_ENCRYPTION_KEY = config(
     "PROVIDER_CREDENTIAL_ENCRYPTION_KEY", 
-    default="VKbEp7xoahybtJudnEGmU0nO3wV3lbGHV18Z9PfoNKU="
+    default=Fernet.generate_key().decode() if TESTING else ""
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -190,4 +192,4 @@ LLM_REQUEST_TIMEOUT = config("LLM_REQUEST_TIMEOUT", default=90, cast=int)
 NVIDIA_NIM_BASE_URL = config("NVIDIA_NIM_BASE_URL", default="https://integrate.api.nvidia.com/v1")
 NVIDIA_NIM_DEFAULT_MODEL = config("NVIDIA_NIM_DEFAULT_MODEL", default="meta/llama-3.2-11b-vision-instruct")
 GROQ_BASE_URL = config("GROQ_BASE_URL", default="https://api.groq.com/openai/v1")
-GROQ_DEFAULT_MODEL = config("GROQ_DEFAULT_MODEL", default="llama-3.3-70b-versatile")
+GROQ_DEFAULT_MODEL = config("GROQ_DEFAULT_MODEL", default="llama-3.3-70b-versatile")
