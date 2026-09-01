@@ -32,7 +32,7 @@ const COLORS_PICK = [
   { id: 'violet', color: '#8b5cf6', label: 'Violet' }
 ];
 
-export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete }) {
+export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete, currentUser, userRole }) {
   const editorRef = useRef(null);
   const [tagInput, setTagInput] = useState('');
 
@@ -198,6 +198,43 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete }) {
           </div>
         </div>
 
+        {/* Author & Timestamp Attribution Banner */}
+        {(() => {
+          const authorRole = note?.author?.role || 'MEMBER';
+          const authorUsername = note?.author?.username || note?.author?.displayName || 'Member';
+          const createdDate = note?.createdAt || note?.updatedAt;
+          const formattedCreated = createdDate ? new Date(createdDate).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+          const lastEditedUsername = note?.lastEditedBy?.username;
+          const lastEditedRole = note?.lastEditedBy?.role;
+
+          return (
+            <div style={styles.authorBanner}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Created by:</span>
+                <span style={{
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  background: authorRole === 'OWNER' ? 'rgba(168, 85, 247, 0.12)' : authorRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(34, 197, 94, 0.12)',
+                  color: authorRole === 'OWNER' ? '#c084fc' : authorRole === 'ADMIN' ? '#60a5fa' : '#4ade80',
+                  border: `1px solid ${authorRole === 'OWNER' ? 'rgba(168, 85, 247, 0.25)' : authorRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(34, 197, 94, 0.25)'}`
+                }}>
+                  {authorRole === 'OWNER' ? '👑 Owner' : authorRole === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({authorUsername})
+                </span>
+                {formattedCreated && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>on {formattedCreated}</span>
+                )}
+                {lastEditedUsername && lastEditedUsername !== authorUsername && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }}>
+                    • Last edited by <strong>{lastEditedRole === 'OWNER' ? '👑 Owner' : lastEditedRole === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({lastEditedUsername})</strong>
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Tag chips input row */}
         <div className="notes-editor-tags-container">
           {note.tags && note.tags.map(tag => (
@@ -237,7 +274,7 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete }) {
       <NotesToolbar onFormat={handleFormatAction} />
       
       {/* Dynamic Status Bar */}
-      <NotesStatusBar bodyText={note.body} />
+      <NotesStatusBar bodyText={note.body} author={note.author} updatedAt={note.updatedAt} />
     </div>
   );
 }
@@ -252,6 +289,11 @@ const styles = {
     borderBottom: '1px solid var(--border-light)',
     marginBottom: '4px',
     paddingLeft: '48px' // Leave spacing for library toggle menu button
+  },
+  authorBanner: {
+    padding: '4px 0 8px 48px',
+    borderBottom: '1px dashed var(--border-light)',
+    marginBottom: '8px'
   },
   headerControls: {
     display: 'flex',

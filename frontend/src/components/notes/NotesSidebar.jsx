@@ -24,6 +24,67 @@ const COLORS_MAP = {
   violet: '#8b5cf6'
 };
 
+const renderAuthorBadge = (note) => {
+  const role = note?.author?.role || 'MEMBER';
+  const username = note?.author?.username || note?.author?.displayName || 'Member';
+  
+  if (role === 'OWNER') {
+    return (
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '3px',
+        padding: '2px 6px',
+        borderRadius: 'var(--radius-full)',
+        fontSize: '10px',
+        fontWeight: '600',
+        background: 'rgba(168, 85, 247, 0.12)',
+        color: '#c084fc',
+        border: '1px solid rgba(168, 85, 247, 0.25)',
+        whiteSpace: 'nowrap'
+      }} title={`Added by Owner: ${username}`}>
+        👑 Owner ({username})
+      </span>
+    );
+  }
+  if (role === 'ADMIN') {
+    return (
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '3px',
+        padding: '2px 6px',
+        borderRadius: 'var(--radius-full)',
+        fontSize: '10px',
+        fontWeight: '600',
+        background: 'rgba(59, 130, 246, 0.12)',
+        color: '#60a5fa',
+        border: '1px solid rgba(59, 130, 246, 0.25)',
+        whiteSpace: 'nowrap'
+      }} title={`Added by Admin: ${username}`}>
+        🛡️ Admin ({username})
+      </span>
+    );
+  }
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '3px',
+      padding: '2px 6px',
+      borderRadius: 'var(--radius-full)',
+      fontSize: '10px',
+      fontWeight: '600',
+      background: 'rgba(34, 197, 94, 0.12)',
+      color: '#4ade80',
+      border: '1px solid rgba(34, 197, 94, 0.25)',
+      whiteSpace: 'nowrap'
+    }} title={`Added by Member: ${username}`}>
+      👤 Member ({username})
+    </span>
+  );
+};
+
 export default function NotesSidebar({
   notes,
   deletedNotes,
@@ -40,7 +101,9 @@ export default function NotesSidebar({
   selectedTag,
   setSelectedTag,
   viewMode,
-  setViewMode
+  setViewMode,
+  currentUser,
+  userRole
 }) {
   const [showTagDropdown, setShowTagDropdown] = useState(false);
 
@@ -226,9 +289,12 @@ export default function NotesSidebar({
                   </span>
                   
                   {filterTab === 'all' ? (
-                    note.isPinned && (
-                      <Pin size={12} style={{ color: 'var(--text-primary)', fill: 'currentColor' }} />
-                    )
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      {renderAuthorBadge(note)}
+                      {note.isPinned && (
+                        <Pin size={12} style={{ color: 'var(--text-primary)', fill: 'currentColor' }} />
+                      )}
+                    </div>
                   ) : (
                     <div className="notes-sidebar-item-bin-actions" onClick={(e) => e.stopPropagation()}>
                       <button 

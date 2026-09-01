@@ -396,6 +396,11 @@ export default function Dashboard() {
   }, []);
 
   const handleCreateNote = () => {
+    const authorUsername = currentUser?.username || 'member_demo';
+    const authorName = currentUser?.first_name 
+      ? `${currentUser.first_name} ${currentUser.last_name || ''}`.trim() 
+      : authorUsername;
+
     const newNote = {
       id: `note-${Date.now()}`,
       title: '',
@@ -403,7 +408,14 @@ export default function Dashboard() {
       isPinned: false,
       color: 'default',
       tags: [],
-      updatedAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      author: {
+        id: currentUser?.user_id || 'demo-user',
+        username: authorUsername,
+        displayName: authorName,
+        role: activeWsRole || 'MEMBER',
+      }
     };
     const updated = [newNote, ...notes];
     saveNotes(updated);
@@ -412,7 +424,21 @@ export default function Dashboard() {
   };
 
   const handleUpdateNote = (updatedNote) => {
-    const updated = notes.map(n => n.id === updatedNote.id ? { ...updatedNote, updatedAt: new Date().toISOString() } : n);
+    const editorUsername = currentUser?.username || 'member_demo';
+    const editorName = currentUser?.first_name 
+      ? `${currentUser.first_name} ${currentUser.last_name || ''}`.trim() 
+      : editorUsername;
+
+    const updated = notes.map(n => n.id === updatedNote.id ? { 
+      ...updatedNote, 
+      updatedAt: new Date().toISOString(),
+      lastEditedBy: {
+        id: currentUser?.user_id || 'demo-user',
+        username: editorUsername,
+        displayName: editorName,
+        role: activeWsRole || 'MEMBER'
+      }
+    } : n);
     saveNotes(updated);
   };
 
@@ -827,6 +853,8 @@ export default function Dashboard() {
               onRestoreNote={handleRestoreNote}
               onPermanentlyDeleteNote={handlePermanentlyDeleteNote}
               onEmptyBin={handleEmptyBin}
+              currentUser={currentUser}
+              userRole={activeWsRole}
             />
           ) : activeTab === 'Tasks' ? (
             <div style={styles.tasksWrapper}>
