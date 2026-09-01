@@ -131,9 +131,9 @@ def main():
                                 result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot create maintenance tickets."}], "isError": True}
                             else:
                                 from task.services.request_service import RequestService
-                                category = arguments.get("category")
-                                description = arguments.get("description")
-                                location = arguments.get("location")
+                                category = arguments.get("category") or "General Maintenance"
+                                description = arguments.get("description") or f"Maintenance request for {category}"
+                                location = arguments.get("location") or "Campus Facility"
                                 
                                 ws_req = RequestService.create_request(
                                     workspace=workspace,

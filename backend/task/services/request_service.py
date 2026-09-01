@@ -159,6 +159,9 @@ class RequestService:
             request.escalation_reason = reason.strip()
             request.save()
 
+            # Sync legacy domain model status
+            cls._sync_legacy_models(request, 'ESCALATED')
+
             RequestEvent.objects.create(
                 request=request,
                 actor=actor,
@@ -182,6 +185,67 @@ class RequestService:
             )
 
         return request
+
+    @classmethod
+    def _sync_legacy_models(cls, request: WorkspaceRequest, target_decision: str):
+        """
+        Synchronizes status updates from the authoritative WorkspaceRequest
+        to any legacy domain model rows (CertificateRequest, LaboratoryBooking, MaintenanceTicket, GrievanceEscalation)
+        created by MCP server tools for the same workspace and requester.
+        """
+        try:
+            from task.models import CertificateRequest, LaboratoryBooking, MaintenanceTicket, GrievanceEscalation
+            req_type = request.request_type
+            ws = request.workspace
+            user = request.requester
+
+            if req_type == 'CERTIFICATE':
+                status_map = {
+                    'APPROVED': 'READY',
+                    'REJECTED': 'REJECTED',
+                    'CANCELLED': 'CANCELLED',
+                }
+                if target_decision in status_map:
+                    CertificateRequest.objects.filter(
+                        workspace=ws, user=user, status='PENDING'
+                    ).update(status=status_map[target_decision])
+
+            elif req_type == 'LAB_BOOKING':
+                status_map = {
+                    'APPROVED': 'CONFIRMED',
+                    'REJECTED': 'CANCELLED',
+                    'CANCELLED': 'CANCELLED',
+                }
+                if target_decision in status_map:
+                    LaboratoryBooking.objects.filter(
+                        workspace=ws, user=user
+                    ).update(status=status_map[target_decision])
+
+            elif req_type == 'MAINTENANCE':
+                status_map = {
+                    'APPROVED': 'RESOLVED',
+                    'REJECTED': 'CLOSED',
+                    'CANCELLED': 'CLOSED',
+                    'ESCALATED': 'ESCALATED',
+                }
+                if target_decision in status_map:
+                    MaintenanceTicket.objects.filter(
+                        workspace=ws, user=user, status__in=['OPEN', 'ASSIGNED', 'IN_PROGRESS']
+                    ).update(status=status_map[target_decision])
+
+            elif req_type == 'GRIEVANCE':
+                status_map = {
+                    'APPROVED': 'RESOLVED',
+                    'REJECTED': 'CLOSED',
+                    'CANCELLED': 'CLOSED',
+                    'ESCALATED': 'ESCALATED',
+                }
+                if target_decision in status_map:
+                    GrievanceEscalation.objects.filter(
+                        workspace=ws, user=user, status__in=['OPEN', 'IN_PROGRESS']
+                    ).update(status=status_map[target_decision])
+        except Exception:
+            pass
 
     @classmethod
     def _generate_default_fulfillment_evidence(cls, request: WorkspaceRequest, actor: User) -> dict:
@@ -277,6 +341,9 @@ class RequestService:
             request.decision_reason = reason.strip() if reason else ""
             request.save()
 
+            # Sync legacy domain model status
+            cls._sync_legacy_models(request, 'APPROVED')
+
             RequestEvent.objects.create(
                 request=request,
                 actor=actor,
@@ -340,6 +407,9 @@ class RequestService:
             request.decision_reason = reason.strip() if reason else "Cancelled by requester."
             request.save()
 
+            # Sync legacy domain model status
+            cls._sync_legacy_models(request, 'CANCELLED')
+
             RequestEvent.objects.create(
                 request=request,
                 actor=actor,
@@ -390,6 +460,9 @@ class RequestService:
             request.reviewed_at = timezone.now()
             request.decision_reason = reason.strip()
             request.save()
+
+            # Sync legacy domain model status
+            cls._sync_legacy_models(request, 'REJECTED')
 
             RequestEvent.objects.create(
                 request=request,

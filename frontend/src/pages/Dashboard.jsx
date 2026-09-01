@@ -15,7 +15,7 @@ import WorkspaceMembersModal from '../components/WorkspaceMembersModal';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import VoiceCommandButton from '../components/VoiceCommandButton';
 import AudioResponsePlayer from '../components/AudioResponsePlayer';
-import RoleSwitcher from '../components/RoleSwitcher';
+import AccountMenu from '../components/AccountMenu';
 import { useVoiceRecognition } from '../hooks/useVoiceRecognition';
 import { workspaceServices } from '../services/workspaceServices';
 import { taskServices } from '../services/taskServices';
@@ -44,7 +44,10 @@ import {
   ShieldCheck,
   ShieldX,
   Inbox,
-  FileCheck
+  FileCheck,
+  Sparkles,
+  User,
+  Eye
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -107,6 +110,38 @@ export default function Dashboard() {
   const activeWsRole = activeWs?.role || 'MEMBER';
   const isViewerRole = activeWsRole === 'VIEWER';
   const isOwnerOrAdmin = activeWsRole === 'OWNER' || activeWsRole === 'ADMIN';
+
+  // URL search parameter deep-linking handler (?task_id=... & ?request_id=...)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const urlTaskId = params.get('task_id');
+      const urlReqId = params.get('request_id');
+      const urlTab = params.get('tab');
+
+      let consumed = false;
+      if (urlTaskId) {
+        setActiveTab('Tasks');
+        setSelectedTaskId(urlTaskId);
+        consumed = true;
+      } else if (urlReqId) {
+        setSelectedRequestId(urlReqId);
+        setActiveTab(isOwnerOrAdmin ? 'Review Center' : 'My Requests');
+        consumed = true;
+      } else if (urlTab) {
+        setActiveTab(urlTab);
+        consumed = true;
+      }
+
+      if (consumed) {
+        // Clean URL query parameters smoothly without reload
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, '', newUrl);
+      }
+    } catch (e) {
+      console.error("Failed to parse URL search parameters:", e);
+    }
+  }, [isOwnerOrAdmin]);
 
   const loadTasks = async (wsId, preferredTaskId = null) => {
     if (!wsId) return;
@@ -245,54 +280,95 @@ export default function Dashboard() {
     return diffDays > 0 ? diffDays : 0;
   };
 
-  // Manage frontend-only list of active notes
-  const [notes, setNotes] = useState(() => {
-    const saved = localStorage.getItem('surge_notes');
+  // Manage notes scoped to active workspace
+  const getNotesStorageKey = (wsId) => `surge_notes_${wsId || 'default'}`;
+  const getBinStorageKey = (wsId) => `surge_notes_bin_${wsId || 'default'}`;
+
+  const loadWorkspaceNotes = (wsId, wsName) => {
+    if (!wsId) return [];
+    const key = getNotesStorageKey(wsId);
+    const saved = localStorage.getItem(key);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
       } catch (e) {
-        console.error("Failed to parse local notes:", e);
+        console.error("Failed to parse local notes for workspace:", wsId, e);
       }
     }
     return [
       {
-        id: 'welcome-note',
-        title: 'Welcome to Surge Notes',
-        body: '<div>This is a premium monochrome notes writing workspace.</div><div>Feel free to format text, add lists, or insert links!</div>',
+        id: `welcome-note-${wsId}`,
+        title: `Welcome to ${wsName || 'Workspace'} Notes`,
+        body: `<div>This is your private notes editor for <strong>${wsName || 'this workspace'}</strong>.</div><div>Feel free to format text, add lists, or insert links!</div>`,
         isPinned: false,
         color: 'default',
-        tags: ['#welcome', '#guide'],
+        tags: ['#welcome', '#notes'],
         updatedAt: new Date().toISOString()
       }
     ];
-  });
+  };
 
-  // Manage frontend-only list of deleted notes (Trash Bin)
-  const [deletedNotes, setDeletedNotes] = useState(() => {
-    const saved = localStorage.getItem('surge_notes_bin');
+  const loadWorkspaceBin = (wsId) => {
+    if (!wsId) return [];
+    const key = getBinStorageKey(wsId);
+    const saved = localStorage.getItem(key);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
       } catch (e) {
-        console.error("Failed to parse local bin notes:", e);
+        console.error("Failed to parse local bin for workspace:", wsId, e);
       }
     }
     return [];
-  });
-
-  const [activeNoteId, setActiveNoteId] = useState(null);
-
-  // Sync active notes to localStorage
-  const saveNotes = (updatedNotes) => {
-    setNotes(updatedNotes);
-    localStorage.setItem('surge_notes', JSON.stringify(updatedNotes));
   };
 
-  // Sync bin notes to localStorage
+  const [notes, setNotes] = useState(() => {
+    const initialWsId = localStorage.getItem('surge_active_workspace_id') || '';
+    return loadWorkspaceNotes(initialWsId, 'Workspace');
+  });
+
+  const [deletedNotes, setDeletedNotes] = useState(() => {
+    const initialWsId = localStorage.getItem('surge_active_workspace_id') || '';
+    return loadWorkspaceBin(initialWsId);
+  });
+
+  const [activeNoteId, setActiveNoteId] = useState(() => {
+    const initialWsId = localStorage.getItem('surge_active_workspace_id') || '';
+    const initialNotes = loadWorkspaceNotes(initialWsId, 'Workspace');
+    return initialNotes[0]?.id || null;
+  });
+
+  // Reload notes and bin whenever the active workspace changes
+  useEffect(() => {
+    if (activeWorkspaceId) {
+      const currentWs = workspaces.find(w => w.id === activeWorkspaceId);
+      const wsNotes = loadWorkspaceNotes(activeWorkspaceId, currentWs?.name);
+      setNotes(wsNotes);
+      setActiveNoteId(wsNotes[0]?.id || null);
+
+      const wsBin = loadWorkspaceBin(activeWorkspaceId);
+      setDeletedNotes(wsBin);
+    }
+  }, [activeWorkspaceId]);
+
+  // Sync active notes to workspace-scoped localStorage
+  const saveNotes = (updatedNotes) => {
+    setNotes(updatedNotes);
+    if (activeWorkspaceId) {
+      localStorage.setItem(getNotesStorageKey(activeWorkspaceId), JSON.stringify(updatedNotes));
+    }
+  };
+
+  // Sync bin notes to workspace-scoped localStorage
   const saveBinNotes = (updatedBinNotes) => {
     setDeletedNotes(updatedBinNotes);
-    localStorage.setItem('surge_notes_bin', JSON.stringify(updatedBinNotes));
+    if (activeWorkspaceId) {
+      localStorage.setItem(getBinStorageKey(activeWorkspaceId), JSON.stringify(updatedBinNotes));
+    }
   };
 
   const fetchWorkspaces = async () => {
@@ -629,24 +705,44 @@ export default function Dashboard() {
           </div>
 
           <div style={styles.headerRight}>
-            <RoleSwitcher 
-              currentRole={activeWsRole} 
-              onProfileSwitched={async (newRole, newUser) => {
-                try {
-                  const wsRes = await workspaceServices.list();
-                  setWorkspaces(wsRes.data);
-                  if (wsRes.data && wsRes.data.length > 0) {
-                    const currentStillValid = wsRes.data.find(w => w.id === activeWorkspaceId);
-                    const targetWsId = currentStillValid ? currentStillValid.id : wsRes.data[0].id;
-                    setActiveWorkspaceId(targetWsId);
-                    localStorage.setItem('surge_active_workspace_id', targetWsId);
-                    loadTasks(targetWsId);
-                  }
-                } catch (err) {
-                  console.error("Failed to refresh workspaces on profile switch:", err);
-                }
-              }} 
-            />
+            {/* Dynamic Workspace Permission Role Badge */}
+            {activeWs && (
+              <div 
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '5px 12px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  background: activeWsRole === 'OWNER' ? 'rgba(139, 92, 246, 0.15)' :
+                              activeWsRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.15)' :
+                              activeWsRole === 'MEMBER' ? 'rgba(16, 185, 129, 0.15)' :
+                              'rgba(100, 116, 139, 0.15)',
+                  color: activeWsRole === 'OWNER' ? '#8b5cf6' :
+                         activeWsRole === 'ADMIN' ? '#3b82f6' :
+                         activeWsRole === 'MEMBER' ? '#10b981' :
+                         '#64748b',
+                  border: `1px solid ${
+                    activeWsRole === 'OWNER' ? 'rgba(139, 92, 246, 0.35)' :
+                    activeWsRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.35)' :
+                    activeWsRole === 'MEMBER' ? 'rgba(16, 185, 129, 0.35)' :
+                    'rgba(100, 116, 139, 0.35)'
+                  }`,
+                }}
+                title={`Your permission role in "${activeWs.name}" is ${activeWsRole}`}
+              >
+                {activeWsRole === 'OWNER' && <Sparkles size={13} />}
+                {activeWsRole === 'ADMIN' && <ShieldCheck size={13} />}
+                {activeWsRole === 'MEMBER' && <User size={13} />}
+                {activeWsRole === 'VIEWER' && <Eye size={13} />}
+                <span>{activeWsRole}</span>
+              </div>
+            )}
+
             <NotificationCenter 
               key={`${currentUser?.user_id || 'guest'}_${activeWorkspaceId}`}
               workspaceId={activeWorkspaceId} 
@@ -664,8 +760,28 @@ export default function Dashboard() {
                 }
               }} 
             />
+
             <ThemeToggle />
-            <div style={styles.profileBadge}>{firstName.substring(0, 2).toUpperCase()}</div>
+
+            {/* Profile Avatar with Account Switcher & Logout Dropdown */}
+            <AccountMenu 
+              onAccountSwitched={async (newUser) => {
+                try {
+                  const wsRes = await workspaceServices.list();
+                  setWorkspaces(wsRes.data);
+                  if (wsRes.data && wsRes.data.length > 0) {
+                    const currentStillValid = wsRes.data.find(w => w.id === activeWorkspaceId);
+                    const targetWsId = currentStillValid ? currentStillValid.id : wsRes.data[0].id;
+                    setActiveWorkspaceId(targetWsId);
+                    localStorage.setItem('surge_active_workspace_id', targetWsId);
+                    loadTasks(targetWsId);
+                  }
+                } catch (err) {
+                  console.error("Failed to refresh workspaces on account switch:", err);
+                }
+              }}
+              onLogout={handleLogout}
+            />
           </div>
         </header>
 
@@ -1028,6 +1144,40 @@ export default function Dashboard() {
                             <h3 style={styles.sectionTitle}>Workspace Tasks</h3>
                           </div>
 
+                          {/* Live Pending Approvals Alert Banner */}
+                          {(() => {
+                            const waitingTask = tasks.find(t => t.status === 'WAITING_FOR_APPROVAL');
+                            if (!waitingTask) return null;
+                            return (
+                              <div
+                                onClick={() => setSelectedTaskId(waitingTask.id)}
+                                style={{
+                                  marginBottom: '12px',
+                                  padding: '10px 14px',
+                                  background: 'rgba(245, 158, 11, 0.1)',
+                                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                                  borderRadius: 'var(--radius-md)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  cursor: 'pointer',
+                                  transition: 'var(--transition-all)'
+                                }}
+                                title="Click to view pending authorization request"
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <ShieldAlert size={16} style={{ color: '#f59e0b', flexShrink: 0 }} />
+                                  <span style={{ fontSize: '12px', fontWeight: '600', color: '#f59e0b' }}>
+                                    {isOwnerOrAdmin ? 'Action Required: 1 task waiting for authorization' : '1 task is pending administrator review'}
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: '11px', fontWeight: '700', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                  Inspect <ChevronRight size={12} />
+                                </span>
+                              </div>
+                            );
+                          })()}
+
                           {tasksLoading && tasks.length === 0 ? (
                             <p style={styles.loadingText}>Loading tasks...</p>
                           ) : tasks.length === 0 ? (
@@ -1169,6 +1319,57 @@ export default function Dashboard() {
                                       <div style={{ padding: '16px' }}>
                                         <MarkdownRenderer text={selectedTask.result} />
                                       </div>
+                                      {(() => {
+                                        const reqMatch = selectedTask.result.match(/\bREQ-\d{4}-\d{6}\b/);
+                                        if (!reqMatch) return null;
+                                        const matchedDisplayId = reqMatch[0];
+                                        return (
+                                          <div style={{
+                                            margin: '0 16px 16px 16px',
+                                            padding: '12px 16px',
+                                            background: 'rgba(59, 130, 246, 0.08)',
+                                            border: '1px solid rgba(59, 130, 246, 0.25)',
+                                            borderRadius: 'var(--radius-md)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: '12px',
+                                            flexWrap: 'wrap'
+                                          }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                              <FileCheck size={18} style={{ color: 'var(--status-info, #3b82f6)' }} />
+                                              <span style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text-primary)' }}>
+                                                Institutional Request Created: <strong style={{ color: 'var(--status-info, #3b82f6)' }}>{matchedDisplayId}</strong>
+                                              </span>
+                                            </div>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setSelectedRequestId(matchedDisplayId);
+                                                setActiveTab(isOwnerOrAdmin ? 'Review Center' : 'My Requests');
+                                              }}
+                                              style={{
+                                                padding: '6px 14px',
+                                                background: 'var(--status-info, #3b82f6)',
+                                                border: 'none',
+                                                borderRadius: 'var(--radius-sm)',
+                                                color: '#ffffff',
+                                                fontWeight: '600',
+                                                fontSize: '12px',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                boxShadow: '0 1px 3px rgba(59, 130, 246, 0.3)',
+                                                transition: 'var(--transition-all)'
+                                              }}
+                                            >
+                                              <span>View in {isOwnerOrAdmin ? 'Review Center' : 'My Requests'}</span>
+                                              <ChevronRight size={14} />
+                                            </button>
+                                          </div>
+                                        );
+                                      })()}
                                     </div>
                                   ) : (
                                     <div style={{
@@ -1444,12 +1645,165 @@ export default function Dashboard() {
                         const selectedTask = tasks.find(t => t.id === selectedTaskId);
                         if (!selectedTask || selectedTask.status !== 'WAITING_FOR_APPROVAL' || !selectedTask.pending_approval) return null;
                         const ap = selectedTask.pending_approval;
-                        return (
-                          <div className="tasks-approval-panel-redesign">
-                            <h3 style={styles.detailTitle}>Approval Required</h3>
+
+                        return isOwnerOrAdmin ? (
+                          /* Admin / Owner View: Actionable Security Console */
+                          <div className="tasks-approval-panel-redesign" style={{ borderLeft: '4px solid var(--status-warning, #f59e0b)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <ShieldAlert size={18} style={{ color: '#f59e0b' }} />
+                                <h3 style={{ ...styles.detailTitle, margin: 0 }}>Security Authorization Console</h3>
+                              </div>
+                              <span style={{
+                                padding: '3px 8px',
+                                borderRadius: 'var(--radius-full)',
+                                fontSize: '10px',
+                                fontWeight: '700',
+                                textTransform: 'uppercase',
+                                background: 'rgba(245, 158, 11, 0.15)',
+                                color: '#f59e0b',
+                                border: '1px solid rgba(245, 158, 11, 0.3)'
+                              }}>Admin Review</span>
+                            </div>
                             
-                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: '1.4', marginTop: '-4px' }}>
-                              Agent execution is paused. This command requires your authorization before proceeding.
+                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                              Agent execution is paused. As a workspace <strong>{activeWsRole || 'Administrator'}</strong>, your explicit authorization is required before this shell command can execute.
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <span style={{ fontSize: 'var(--text-xs)', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Requested Shell Command
+                              </span>
+                              <code style={{
+                                display: 'block',
+                                padding: '12px',
+                                background: 'var(--bg-input, #1f1f23)',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: '13px',
+                                fontFamily: 'monospace',
+                                color: 'var(--text-primary)',
+                                wordBreak: 'break-all',
+                                border: '1px solid var(--border-medium)',
+                                lineHeight: '1.4'
+                              }}>{ap.sanitized_display_command}</code>
+                            </div>
+
+                            {ap.reason && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <span style={{ fontSize: 'var(--text-xs)', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                  Agent Justification
+                                </span>
+                                <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: '1.4' }}>{ap.reason}</p>
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div>
+                                <span style={{ fontSize: 'var(--text-xs)', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Risk Level: </span>
+                                <span style={{
+                                  padding: '2px 8px',
+                                  borderRadius: 'var(--radius-full)',
+                                  fontSize: '10px',
+                                  fontWeight: '700',
+                                  textTransform: 'uppercase',
+                                  background: ap.risk === 'HIGH' ? 'rgba(239, 68, 68, 0.1)' : ap.risk === 'MEDIUM' ? 'rgba(245, 158, 11, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                                  color: ap.risk === 'HIGH' ? 'var(--status-error, #ef4444)' : ap.risk === 'MEDIUM' ? 'var(--status-warning, #f59e0b)' : 'var(--status-success, #10b981)',
+                                  border: `1px solid ${ap.risk === 'HIGH' ? 'rgba(239, 68, 68, 0.2)' : ap.risk === 'MEDIUM' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)'}`
+                                }}>{ap.risk}</span>
+                              </div>
+                              {ap.expires_at && (
+                                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                                  Expires: {new Date(ap.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                              )}
+                            </div>
+
+                            <div style={{ padding: '10px 12px', background: 'rgba(245, 158, 11, 0.04)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--text-secondary)', border: '1px dashed rgba(245, 158, 11, 0.2)' }}>
+                              ⚠️ <strong>Allow Once</strong> executes only this exact command once. It does not whitelist future actions.
+                            </div>
+
+                            {approvalError && (
+                              <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.06)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--status-error, #ef4444)' }}>
+                                {approvalError}
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', gap: '12px', marginTop: 'auto', paddingTop: '12px' }}>
+                              <button
+                                id={`modal-approve-btn-${ap.id}`}
+                                onClick={() => handleApproveCommand(selectedTask.id, ap.id)}
+                                disabled={approvalLoading}
+                                style={{
+                                  flex: 1,
+                                  padding: '10px 16px',
+                                  background: 'var(--status-success, #10b981)',
+                                  border: 'none',
+                                  borderRadius: 'var(--radius-sm)',
+                                  color: '#ffffff',
+                                  fontWeight: '600',
+                                  fontSize: 'var(--text-sm)',
+                                  cursor: approvalLoading ? 'not-allowed' : 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '8px',
+                                  opacity: approvalLoading ? 0.6 : 1,
+                                  boxShadow: '0 2px 4px rgba(16, 185, 129, 0.2)',
+                                  transition: 'var(--transition-all)'
+                                }}
+                              >
+                                <ShieldCheck size={16} />
+                                <span>{approvalLoading ? 'Authorizing...' : 'Allow Once'}</span>
+                              </button>
+                              <button
+                                id={`modal-deny-btn-${ap.id}`}
+                                onClick={() => handleDenyCommand(selectedTask.id, ap.id)}
+                                disabled={approvalLoading}
+                                style={{
+                                  flex: 1,
+                                  padding: '10px 16px',
+                                  background: 'rgba(239, 68, 68, 0.08)',
+                                  border: '1px solid var(--status-error, #ef4444)',
+                                  borderRadius: 'var(--radius-sm)',
+                                  color: 'var(--status-error, #ef4444)',
+                                  fontWeight: '600',
+                                  fontSize: 'var(--text-sm)',
+                                  cursor: approvalLoading ? 'not-allowed' : 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '8px',
+                                  opacity: approvalLoading ? 0.6 : 1,
+                                  transition: 'var(--transition-all)'
+                                }}
+                              >
+                                <ShieldX size={16} />
+                                <span>{approvalLoading ? 'Denying...' : 'Deny Command'}</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          /* Member / Viewer View: Informative Status & Review Progress Card */
+                          <div className="tasks-approval-panel-redesign" style={{ borderLeft: '4px solid var(--status-info, #3b82f6)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Clock size={18} style={{ color: 'var(--status-info, #3b82f6)' }} />
+                                <h3 style={{ ...styles.detailTitle, margin: 0 }}>Awaiting Authorization</h3>
+                              </div>
+                              <span style={{
+                                padding: '3px 8px',
+                                borderRadius: 'var(--radius-full)',
+                                fontSize: '10px',
+                                fontWeight: '700',
+                                textTransform: 'uppercase',
+                                background: 'rgba(59, 130, 246, 0.15)',
+                                color: '#3b82f6',
+                                border: '1px solid rgba(59, 130, 246, 0.3)'
+                              }}>Pending Admin</span>
+                            </div>
+
+                            <div style={{ padding: '12px 14px', background: 'rgba(59, 130, 246, 0.06)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(59, 130, 246, 0.18)', fontSize: 'var(--text-xs)', color: 'var(--text-primary)', lineHeight: '1.5' }}>
+                              ⏸ <strong>Task Paused:</strong> This agent requested to run a sensitive system inspection command. To safeguard institutional data, execution is paused until a workspace <strong>Admin or Owner</strong> authorizes this action.
                             </div>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1481,7 +1835,7 @@ export default function Dashboard() {
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div>
-                                <span style={{ fontSize: 'var(--text-xs)', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Risk Level: </span>
+                                <span style={{ fontSize: 'var(--text-xs)', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Risk Rating: </span>
                                 <span style={{
                                   padding: '2px 8px',
                                   borderRadius: 'var(--radius-full)',
@@ -1500,83 +1854,11 @@ export default function Dashboard() {
                               )}
                             </div>
 
-                            <div style={{ padding: '10px 12px', background: 'rgba(245, 158, 11, 0.04)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--text-secondary)', border: '1px dashed rgba(245, 158, 11, 0.2)' }}>
-                              ⚠️ <strong>Allow Once</strong> executes only this exact command. It does not whitelist future actions.
-                            </div>
-
-                            {(() => {
-                              const isTaskCreator = selectedTask?.creator === currentUser?.user_id || selectedTask?.creator_details?.id === currentUser?.user_id;
-                              const canAuthorize = isOwnerOrAdmin || isTaskCreator;
-                              return !canAuthorize ? (
-                                <div style={{ padding: '8px 12px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 'var(--radius-sm)', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
-                                  🔒 Command authorization is restricted to the Task Creator, Workspace Admin, or Workspace Owner.
-                                </div>
-                              ) : null;
-                            })()}
-
-                            {approvalError && (
-                              <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.06)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--status-error, #ef4444)' }}>
-                                {approvalError}
+                            <div style={{ marginTop: 'auto', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <div style={{ padding: '10px 12px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-light)', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                                💡 <strong>Hackathon Demo Evaluation:</strong> Switch to the <strong>Admin User</strong> profile using the top-bar Role Switcher to authorize and resume execution of this task.
                               </div>
-                            )}
-
-                            {(() => {
-                              const isTaskCreator = selectedTask?.creator === currentUser?.user_id || selectedTask?.creator_details?.id === currentUser?.user_id;
-                              const canAuthorize = isOwnerOrAdmin || isTaskCreator;
-                              return (
-                                <div style={{ display: 'flex', gap: '12px', marginTop: 'auto', paddingTop: '12px' }}>
-                                  <button
-                                    id={`modal-approve-btn-${ap.id}`}
-                                    onClick={() => handleApproveCommand(selectedTask.id, ap.id)}
-                                    disabled={!canAuthorize || approvalLoading}
-                                    style={{
-                                      flex: 1,
-                                      padding: '8px 16px',
-                                      background: 'var(--status-success, #10b981)',
-                                      border: 'none',
-                                      borderRadius: 'var(--radius-sm)',
-                                      color: '#ffffff',
-                                      fontWeight: '600',
-                                      fontSize: 'var(--text-sm)',
-                                      cursor: (!canAuthorize || approvalLoading) ? 'not-allowed' : 'pointer',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      gap: '8px',
-                                      opacity: (!canAuthorize || approvalLoading) ? 0.45 : 1,
-                                      boxShadow: '0 2px 4px rgba(16, 185, 129, 0.15)',
-                                      transition: 'var(--transition-all)'
-                                    }}
-                                  >
-                                    {approvalLoading ? '⏳ Processing...' : 'Allow Once'}
-                                  </button>
-                                  <button
-                                    id={`modal-deny-btn-${ap.id}`}
-                                    onClick={() => handleDenyCommand(selectedTask.id, ap.id)}
-                                    disabled={!canAuthorize || approvalLoading}
-                                    style={{
-                                      flex: 1,
-                                      padding: '8px 16px',
-                                      background: 'rgba(239, 68, 68, 0.08)',
-                                      border: '1px solid var(--status-error, #ef4444)',
-                                      borderRadius: 'var(--radius-sm)',
-                                      color: 'var(--status-error, #ef4444)',
-                                      fontWeight: '600',
-                                      fontSize: 'var(--text-sm)',
-                                      cursor: (!canAuthorize || approvalLoading) ? 'not-allowed' : 'pointer',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      gap: '8px',
-                                      opacity: (!canAuthorize || approvalLoading) ? 0.45 : 1,
-                                      transition: 'var(--transition-all)'
-                                    }}
-                                  >
-                                    {approvalLoading ? '⏳ Processing...' : 'Deny'}
-                                  </button>
-                                </div>
-                              );
-                            })()}
+                            </div>
                           </div>
                         );
                       })()}

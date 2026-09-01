@@ -545,6 +545,18 @@ class ExecutionService:
                         resolved_key = decrypt_value(cred.encrypted_api_key)
                     except (UserProviderCredential.DoesNotExist, AttributeError):
                         resolved_key = None
+
+                    # Secondary fallback to workspace Admin's configured provider key
+                    if not resolved_key:
+                        admin_memberships = task.workspace.memberships.filter(role='ADMIN').select_related('user')
+                        for membership in admin_memberships:
+                            try:
+                                cred = UserProviderCredential.objects.get(user=membership.user, provider=provider_name.lower())
+                                resolved_key = decrypt_value(cred.encrypted_api_key)
+                                if resolved_key:
+                                    break
+                            except UserProviderCredential.DoesNotExist:
+                                continue
                     
                 if not resolved_key:
                     # Key is missing!
@@ -1430,7 +1442,28 @@ class ExecutionService:
                     )
                     resolved_key = decrypt_value(cred.encrypted_api_key)
                 except UserProviderCredential.DoesNotExist:
-                    resolved_key = None
+                    # Fallback to workspace owner
+                    try:
+                        cred = UserProviderCredential.objects.get(
+                            user=task.workspace.owner, provider=provider_name.lower()
+                        )
+                        resolved_key = decrypt_value(cred.encrypted_api_key)
+                    except (UserProviderCredential.DoesNotExist, AttributeError):
+                        resolved_key = None
+
+                    # Secondary fallback to workspace Admin
+                    if not resolved_key:
+                        admin_memberships = task.workspace.memberships.filter(role='ADMIN').select_related('user')
+                        for membership in admin_memberships:
+                            try:
+                                cred = UserProviderCredential.objects.get(
+                                    user=membership.user, provider=provider_name.lower()
+                                )
+                                resolved_key = decrypt_value(cred.encrypted_api_key)
+                                if resolved_key:
+                                    break
+                            except UserProviderCredential.DoesNotExist:
+                                continue
         else:
             model_provider = self.provider
             is_real = not isinstance(self.provider, FakeModelProvider)

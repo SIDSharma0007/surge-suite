@@ -470,10 +470,30 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                 cred = UserProviderCredential.objects.get(user=request.user, provider=provider_name)
                 resolved_key = decrypt_value(cred.encrypted_api_key)
             except UserProviderCredential.DoesNotExist:
-                return Response(
-                    {"error": f"API key for '{provider_name}' is not configured. Please add it in Provider Settings."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                # Fallback to workspace owner
+                try:
+                    cred = UserProviderCredential.objects.get(user=workspace.owner, provider=provider_name)
+                    resolved_key = decrypt_value(cred.encrypted_api_key)
+                except (UserProviderCredential.DoesNotExist, AttributeError):
+                    resolved_key = None
+
+                # Secondary fallback to workspace Admin
+                if not resolved_key:
+                    admin_memberships = workspace.memberships.filter(role='ADMIN').select_related('user')
+                    for membership in admin_memberships:
+                        try:
+                            cred = UserProviderCredential.objects.get(user=membership.user, provider=provider_name)
+                            resolved_key = decrypt_value(cred.encrypted_api_key)
+                            if resolved_key:
+                                break
+                        except UserProviderCredential.DoesNotExist:
+                            continue
+
+                if not resolved_key:
+                    return Response(
+                        {"error": f"API key for '{provider_name}' is not configured. Please add it in Provider Settings."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             except Exception:
                 return Response(
                     {"error": "Failed to decrypt provider API key."},

@@ -179,7 +179,15 @@ def dev_login_api(request):
     """
     POST /api/v1/auth/dev-login/
     Allows rapid testing by switching session to a specific test account (owner, admin, member, viewer).
+    Strictly disabled in non-DEBUG environments.
     """
+    from django.conf import settings
+    if not getattr(settings, 'DEBUG', False):
+        return Response(
+            {"error": "Developer quick-login is disabled in non-DEBUG environments."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     from django.contrib.auth.models import User
     from django.contrib.auth import login as django_login
     from workspace.models import Workspace
@@ -190,19 +198,30 @@ def dev_login_api(request):
     target_user = None
 
     if target_username:
-        target_user = User.objects.filter(username=target_username).first()
-    elif role_target == 'owner':
-        owner_ws = Workspace.objects.first()
-        target_user = owner_ws.owner if owner_ws else User.objects.first()
-    elif role_target == 'admin':
-        target_user, _ = User.objects.get_or_create(username='admin_demo', defaults={'first_name': 'Admin User'})
-    elif role_target == 'member':
-        target_user, _ = User.objects.get_or_create(username='member_demo', defaults={'first_name': 'Member User'})
-    elif role_target == 'viewer':
-        target_user, _ = User.objects.get_or_create(username='viewer_demo', defaults={'first_name': 'Viewer User'})
+        # Match by username or first name
+        target_user = (
+            User.objects.filter(username__iexact=target_username).first() or
+            User.objects.filter(first_name__iexact=target_username).first()
+        )
 
     if not target_user:
-        return Response({"error": f"Target user for role '{role_target}' not found."}, status=status.HTTP_404_NOT_FOUND)
+        if role_target in ('owner', 'saurav'):
+            target_user = (
+                User.objects.filter(first_name__iexact='saurav').first() or
+                User.objects.filter(username__iexact='saurav').first() or
+                User.objects.filter(username__iexact='owner_demo').first() or
+                User.objects.exclude(username__in=['admin_demo', 'member_demo', 'viewer_demo', 'test_user']).order_by('id').first() or
+                User.objects.first()
+            )
+        elif role_target in ('admin', 'admin_demo'):
+            target_user, _ = User.objects.get_or_create(username='admin_demo', defaults={'first_name': 'Admin User'})
+        elif role_target in ('member', 'member_demo'):
+            target_user, _ = User.objects.get_or_create(username='member_demo', defaults={'first_name': 'Member User'})
+        elif role_target in ('viewer', 'viewer_demo'):
+            target_user, _ = User.objects.get_or_create(username='viewer_demo', defaults={'first_name': 'Viewer User'})
+
+    if not target_user:
+        return Response({"error": f"Target user for '{target_username or role_target}' not found."}, status=status.HTTP_404_NOT_FOUND)
 
     django_login(request, target_user)
 

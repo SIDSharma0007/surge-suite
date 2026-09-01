@@ -131,9 +131,9 @@ def main():
                                 result = {"content": [{"type": "text", "text": "Permission Denied: Read-only VIEWER role cannot raise grievances."}], "isError": True}
                             else:
                                 from task.services.request_service import RequestService
-                                subject = arguments.get("subject")
-                                description = arguments.get("description")
-                                department = arguments.get("department", "")
+                                subject = arguments.get("subject") or "Institutional Grievance"
+                                description = arguments.get("description") or subject
+                                department = arguments.get("department") or "General Administration"
                                 
                                 ws_req = RequestService.create_request(
                                     workspace=workspace,
