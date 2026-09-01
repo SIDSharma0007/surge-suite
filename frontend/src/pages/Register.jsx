@@ -227,9 +227,9 @@ const styles = {
   },
   submitBtn: {
     width: '100%',
-    background: 'var(--text-primary)',
-    border: '1px solid var(--text-primary)',
-    color: 'var(--bg-card)',
+    background: 'var(--btn-primary-bg)',
+    border: '1px solid var(--btn-primary-bg)',
+    color: 'var(--btn-primary-text)',
     padding: '12px',
     borderRadius: 'var(--radius-md)',
     fontSize: 'var(--text-sm)',

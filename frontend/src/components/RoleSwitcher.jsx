@@ -190,8 +190,8 @@ const styles = {
     top: 'calc(100% + 8px)',
     right: 0,
     width: '320px',
-    backgroundColor: 'var(--bg-card, #1e222d)',
-    border: '1px solid var(--border-medium, #2d3343)',
+    backgroundColor: 'var(--bg-card)',
+    border: '1px solid var(--border-medium)',
     borderRadius: '12px',
     boxShadow: '0 12px 30px rgba(0, 0, 0, 0.35)',
     zIndex: 999,
@@ -200,8 +200,8 @@ const styles = {
   },
   dropdownHeader: {
     padding: '12px 14px',
-    borderBottom: '1px solid var(--border-subtle, rgba(255,255,255,0.06))',
-    backgroundColor: 'var(--bg-secondary, #141721)',
+    borderBottom: '1px solid var(--border-subtle)',
+    backgroundColor: 'var(--bg-secondary)',
   },
   dropdownTitle: {
     display: 'block',

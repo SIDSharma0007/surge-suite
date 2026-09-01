@@ -379,9 +379,9 @@ const styles = {
     fontWeight: '600',
     padding: '2px 8px',
     borderRadius: '12px',
-    backgroundColor: 'rgba(10, 132, 255, 0.12)',
-    color: '#0A84FF',
-    border: '1px solid rgba(10, 132, 255, 0.25)'
+    backgroundColor: 'var(--accent-soft, rgba(10, 132, 255, 0.12))',
+    color: 'var(--accent, #0A84FF)',
+    border: '1px solid var(--accent, rgba(10, 132, 255, 0.25))'
   },
   headerSubtitle: {
     fontSize: '12px',
@@ -441,7 +441,8 @@ const styles = {
     width: '28px',
     height: '28px',
     borderRadius: '50%',
-    backgroundColor: '#007AFF', // Clean iOS blue
+    backgroundColor: 'var(--accent, #007AFF)',
+    color: 'var(--btn-primary-text, #ffffff)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -451,7 +452,9 @@ const styles = {
     width: '28px',
     height: '28px',
     borderRadius: '50%',
-    backgroundColor: '#8E8E93', // Cool grey
+    backgroundColor: 'var(--bg-secondary)',
+    color: 'var(--text-secondary)',
+    border: '1px solid var(--border-medium)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -527,9 +530,9 @@ const styles = {
     fontWeight: '500',
     padding: '6px 12px',
     borderRadius: '6px',
-    backgroundColor: 'rgba(10, 132, 255, 0.1)',
-    color: '#0A84FF',
-    border: '1px solid rgba(10, 132, 255, 0.3)',
+    backgroundColor: 'var(--accent-soft, rgba(10, 132, 255, 0.1))',
+    color: 'var(--accent, #0A84FF)',
+    border: '1px solid var(--accent-soft, rgba(10, 132, 255, 0.3))',
     cursor: 'pointer',
     transition: 'all 0.15s ease'
   },

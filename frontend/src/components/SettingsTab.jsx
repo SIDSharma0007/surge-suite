@@ -1,9 +1,66 @@
 import React, { useState, useEffect } from 'react';
 import { settingsServices } from '../services/settingsServices';
 import { workspaceServices } from '../services/workspaceServices';
-import { Eye, EyeOff, Save, Trash2, CheckCircle, AlertCircle, Cpu, Sliders, Plus, Edit2, Play, Square, Settings, RefreshCw } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
+import { 
+  Eye, 
+  EyeOff, 
+  Save, 
+  Trash2, 
+  CheckCircle, 
+  AlertCircle, 
+  Cpu, 
+  Sliders, 
+  Plus, 
+  Edit2, 
+  Play, 
+  Square, 
+  Settings, 
+  RefreshCw,
+  Palette,
+  RotateCcw,
+  Check,
+  Sparkles
+} from 'lucide-react';
+
+const QUICK_ACCENTS = [
+  '#2563EB', '#7C3AED', '#059669', '#EA580C', 
+  '#E11D48', '#06B6D4', '#FACC15', '#EC4899', 
+  '#6366F1', '#14B8A6', '#F43F5E', '#84CC16'
+];
 
 export default function SettingsTab({ activeWorkspaceId, userRole = 'OWNER', isOwnerOrAdmin = true, onWorkspaceUpdated }) {
+  // Theme context
+  const { 
+    theme, 
+    preset, 
+    setPreset, 
+    accentColor, 
+    effectiveAccent, 
+    setCustomAccent, 
+    resetToMonochrome, 
+    presets 
+  } = useTheme();
+
+  const [customHexInput, setCustomHexInput] = useState(accentColor || '#2563EB');
+
+  useEffect(() => {
+    if (accentColor) {
+      setCustomHexInput(accentColor);
+    }
+  }, [accentColor]);
+
+  const handleCustomHexChange = (val) => {
+    setCustomHexInput(val);
+    let cleaned = val.trim();
+    if (!cleaned.startsWith('#')) {
+      cleaned = `#${cleaned}`;
+    }
+    if (/^#[0-9A-Fa-f]{6}$/.test(cleaned) || /^#[0-9A-Fa-f]{3}$/.test(cleaned)) {
+      setCustomAccent(cleaned);
+    }
+  };
+
   // Provider registry state from backend
   const [registry, setRegistry] = useState({});
   
@@ -29,7 +86,7 @@ export default function SettingsTab({ activeWorkspaceId, userRole = 'OWNER', isO
   const [actionLoading, setActionLoading] = useState({});
 
   // Sub-tabs
-  const [activeSubTab, setActiveSubTab] = useState('ai_settings'); // 'ai_settings' or 'mcp_registry'
+  const [activeSubTab, setActiveSubTab] = useState('ai_settings'); // 'ai_settings', 'mcp_registry', or 'appearance'
 
   // MCP registry states
   const [builtinMCPs, setBuiltinMCPs] = useState([]);
@@ -429,6 +486,19 @@ export default function SettingsTab({ activeWorkspaceId, userRole = 'OWNER', isO
           }}
         >
           MCP Registry
+        </button>
+        <button
+          onClick={() => setActiveSubTab('appearance')}
+          style={{
+            ...styles.subTabBtn,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            ...(activeSubTab === 'appearance' ? styles.subTabBtnActive : {})
+          }}
+        >
+          <Palette size={15} />
+          Appearance
         </button>
       </div>
 
@@ -939,6 +1009,259 @@ export default function SettingsTab({ activeWorkspaceId, userRole = 'OWNER', isO
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {activeSubTab === 'appearance' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+          {/* Section 1: Color Theme Presets */}
+          <section style={styles.sectionBlock}>
+            <div style={styles.sectionHeaderLine}>
+              <Palette size={20} style={{ marginRight: '8px', color: 'var(--accent, var(--text-primary))' }} />
+              <h2 style={styles.sectionBlockTitle}>Color Theme</h2>
+            </div>
+            <p style={styles.sectionBlockSubtitle}>
+              Customize the visual color palette of Surge Suite. The selected color acts as the root accent, from which the entire UI palette is derived with automatic WCAG contrast protection.
+            </p>
+
+            <div style={styles.presetGrid}>
+              {presets.map((p) => {
+                const isSelected = preset === p.id;
+                const activeColor = theme === 'dark' && p.darkAccent ? p.darkAccent : p.accent;
+                return (
+                  <div
+                    key={p.id}
+                    onClick={() => setPreset(p.id)}
+                    style={{
+                      ...styles.presetCard,
+                      borderColor: isSelected ? 'var(--accent, var(--border-focus))' : 'var(--border-light)',
+                      boxShadow: isSelected ? '0 0 0 2px var(--accent, var(--border-focus)), var(--shadow-md)' : 'var(--shadow-sm)',
+                      backgroundColor: isSelected ? 'var(--bg-hover)' : 'var(--bg-card)',
+                    }}
+                  >
+                    <div style={styles.presetTopRow}>
+                      <div style={styles.swatchRow}>
+                        {p.previewSwatches ? (
+                          p.previewSwatches.map((swatch, idx) => (
+                            <span
+                              key={idx}
+                              style={{
+                                width: idx === 0 ? '22px' : '16px',
+                                height: idx === 0 ? '22px' : '16px',
+                                borderRadius: '50%',
+                                backgroundColor: swatch,
+                                border: '1px solid var(--border-medium)',
+                                display: 'inline-block',
+                                flexShrink: 0,
+                              }}
+                            />
+                          ))
+                        ) : (
+                          <span
+                            style={{
+                              width: '22px',
+                              height: '22px',
+                              borderRadius: '50%',
+                              backgroundColor: p.id === 'custom' ? (accentColor || '#2563EB') : activeColor,
+                              border: '1px solid var(--border-medium)',
+                              display: 'inline-block',
+                            }}
+                          />
+                        )}
+                      </div>
+                      {isSelected && (
+                        <div style={styles.selectedBadge}>
+                          <Check size={12} strokeWidth={3} />
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={styles.presetInfo}>
+                      <span style={styles.presetName}>{p.name}</span>
+                      <span style={styles.presetDesc}>{p.description}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Section 2: Custom Accent Color */}
+          {preset === 'custom' && (
+            <section style={styles.sectionBlock}>
+              <div style={styles.sectionHeaderLine}>
+                <Sparkles size={18} style={{ marginRight: '8px', color: 'var(--accent, var(--text-primary))' }} />
+                <h2 style={styles.sectionBlockTitle}>Custom Accent Color</h2>
+              </div>
+              <p style={styles.sectionBlockSubtitle}>
+                Select an accent color using the color picker or enter a hex code. Changes reflect immediately across the entire workspace.
+              </p>
+
+              <div style={styles.customPickerRow}>
+                <div style={styles.colorInputWrapper}>
+                  <input
+                    type="color"
+                    id="theme-native-color-picker"
+                    value={accentColor.startsWith('#') && accentColor.length === 7 ? accentColor : '#2563EB'}
+                    onChange={(e) => {
+                      setCustomHexInput(e.target.value);
+                      setCustomAccent(e.target.value);
+                    }}
+                    style={styles.nativeColorInput}
+                    title="Choose Accent Color"
+                  />
+                  <label htmlFor="theme-native-color-picker" style={styles.colorPickerLabel}>
+                    Pick Color
+                  </label>
+                </div>
+
+                <div style={styles.hexInputWrapper}>
+                  <span style={styles.hexInputPrefix}>HEX</span>
+                  <input
+                    type="text"
+                    value={customHexInput}
+                    onChange={(e) => handleCustomHexChange(e.target.value)}
+                    placeholder="#2563EB"
+                    maxLength={7}
+                    style={styles.hexInputField}
+                  />
+                </div>
+
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '8px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'var(--btn-primary-bg)',
+                  color: 'var(--btn-primary-text)',
+                  fontSize: 'var(--text-xs)',
+                  fontWeight: '700',
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  border: '1px solid var(--border-medium)',
+                  boxShadow: 'var(--shadow-sm)',
+                }}>
+                  Active Accent: {effectiveAccent}
+                </div>
+              </div>
+
+              {/* Quick Picks */}
+              <div style={styles.quickPickSection}>
+                <span style={styles.quickPickLabel}>Popular Accents</span>
+                <div style={styles.quickPickGrid}>
+                  {QUICK_ACCENTS.map((hex) => (
+                    <button
+                      key={hex}
+                      type="button"
+                      onClick={() => {
+                        setCustomHexInput(hex);
+                        setCustomAccent(hex);
+                      }}
+                      style={{
+                        ...styles.quickPickBtn,
+                        backgroundColor: hex,
+                        boxShadow: accentColor.toLowerCase() === hex.toLowerCase()
+                          ? '0 0 0 2px var(--bg-card), 0 0 0 4px ' + hex
+                          : 'none',
+                      }}
+                      title={`Select ${hex}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* Section 3: Reset to Monochrome */}
+          <section style={styles.sectionBlock}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+              <div>
+                <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', margin: '0 0 4px 0' }}>
+                  Reset to Monochrome
+                </h3>
+                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: 0 }}>
+                  Immediately restore the exact original black & white high-contrast monochrome appearance.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={resetToMonochrome}
+                style={styles.resetBtn}
+                title="Reset to default monochrome theme"
+              >
+                <RotateCcw size={14} style={{ marginRight: '6px' }} />
+                Reset to Monochrome
+              </button>
+            </div>
+          </section>
+
+          {/* Section 4: Live Theme Preview Card */}
+          <section style={styles.sectionBlock}>
+            <div style={styles.sectionHeaderLine}>
+              <Sliders size={18} style={{ marginRight: '8px', color: 'var(--text-secondary)' }} />
+              <h2 style={styles.sectionBlockTitle}>Live Theme Preview</h2>
+            </div>
+            <p style={styles.sectionBlockSubtitle}>
+              Interactive preview demonstrating how buttons, surfaces, text contrast, badges, and dropdowns adapt in real-time.
+            </p>
+
+            <div style={styles.previewContainer}>
+              {/* Preview Row 1: Typography & Buttons */}
+              <div style={styles.previewRow}>
+                <div style={styles.previewCol}>
+                  <span style={styles.previewLabel}>Buttons & Actions</span>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <button style={styles.previewPrimaryBtn}>
+                      Primary Button
+                    </button>
+                    <button style={styles.previewSecondaryBtn}>
+                      Secondary Button
+                    </button>
+                  </div>
+                </div>
+
+                <div style={styles.previewCol}>
+                  <span style={styles.previewLabel}>Theme & Complementary Accents</span>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={styles.previewAccentBadge}>
+                      Accent Tag
+                    </span>
+                    <span style={styles.previewCompBadge}>
+                      Complementary Tag
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Preview Row 2: Status Indicators & Form Controls */}
+              <div style={{ ...styles.previewRow, borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
+                <div style={styles.previewCol}>
+                  <span style={styles.previewLabel}>Semantic Status Colors (Preserved)</span>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={styles.previewStatusSuccess}>✓ Success</span>
+                    <span style={styles.previewStatusWarning}>⚠ Warning</span>
+                    <span style={styles.previewStatusError}>✕ Error</span>
+                  </div>
+                </div>
+
+                <div style={styles.previewCol}>
+                  <span style={styles.previewLabel}>Form Controls</span>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', width: '100%' }}>
+                    <input
+                      readOnly
+                      value="Dynamic themed input"
+                      style={styles.previewInputSample}
+                    />
+                    <select style={styles.previewSelectSample} defaultValue="opt1">
+                      <option value="opt1">Readable Option 1</option>
+                      <option value="opt2">Readable Option 2</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       )}
     </div>
@@ -1524,5 +1847,270 @@ const styles = {
     marginTop: '16px',
     borderTop: '1px solid var(--border-light)',
     paddingTop: '16px',
+  },
+  presetGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+    gap: '16px',
+    marginTop: '16px',
+  },
+  presetCard: {
+    padding: '16px',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-light)',
+    cursor: 'pointer',
+    transition: 'var(--transition-all)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    userSelect: 'none',
+  },
+  presetTopRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  swatchRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  selectedBadge: {
+    width: '20px',
+    height: '20px',
+    borderRadius: '50%',
+    backgroundColor: 'var(--accent, var(--text-primary))',
+    color: 'var(--btn-primary-text, #ffffff)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  presetInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  presetName: {
+    fontSize: 'var(--text-base)',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
+  },
+  presetDesc: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-secondary)',
+    lineHeight: '1.4',
+  },
+  customPickerRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+    flexWrap: 'wrap',
+    marginTop: '12px',
+  },
+  colorInputWrapper: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    backgroundColor: 'var(--bg-hover)',
+    padding: '4px 10px 4px 4px',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-medium)',
+  },
+  nativeColorInput: {
+    width: '36px',
+    height: '36px',
+    padding: 0,
+    border: 'none',
+    borderRadius: 'var(--radius-sm)',
+    cursor: 'pointer',
+    backgroundColor: 'transparent',
+  },
+  colorPickerLabel: {
+    fontSize: 'var(--text-xs)',
+    fontWeight: '600',
+    color: 'var(--text-primary)',
+    cursor: 'pointer',
+  },
+  hexInputWrapper: {
+    display: 'flex',
+    alignItems: 'center',
+    backgroundColor: 'var(--bg-input)',
+    border: '1px solid var(--border-medium)',
+    borderRadius: 'var(--radius-md)',
+    overflow: 'hidden',
+    height: '44px',
+  },
+  hexInputPrefix: {
+    padding: '0 10px',
+    fontSize: '11px',
+    fontWeight: '700',
+    color: 'var(--text-muted)',
+    backgroundColor: 'var(--bg-hover)',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    borderRight: '1px solid var(--border-light)',
+  },
+  hexInputField: {
+    padding: '0 12px',
+    fontSize: 'var(--text-sm)',
+    fontFamily: 'monospace',
+    fontWeight: '600',
+    color: 'var(--text-primary)',
+    width: '100px',
+    outline: 'none',
+    border: 'none',
+    backgroundColor: 'transparent',
+  },
+  quickPickSection: {
+    marginTop: '20px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  quickPickLabel: {
+    fontSize: 'var(--text-xs)',
+    fontWeight: '600',
+    color: 'var(--text-secondary)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  quickPickGrid: {
+    display: 'flex',
+    gap: '8px',
+    flexWrap: 'wrap',
+  },
+  quickPickBtn: {
+    width: '28px',
+    height: '28px',
+    borderRadius: 'var(--radius-sm)',
+    border: '1px solid var(--border-medium)',
+    cursor: 'pointer',
+    transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+  },
+  resetBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '10px 18px',
+    backgroundColor: 'var(--bg-secondary)',
+    border: '1px solid var(--border-medium)',
+    borderRadius: 'var(--radius-md)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--text-sm)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'var(--transition-all)',
+  },
+  previewContainer: {
+    backgroundColor: 'var(--bg-secondary)',
+    border: '1px solid var(--border-medium)',
+    borderRadius: 'var(--radius-md)',
+    padding: '20px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '18px',
+    marginTop: '12px',
+  },
+  previewRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: '20px',
+  },
+  previewCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  previewLabel: {
+    fontSize: 'var(--text-xs)',
+    fontWeight: '600',
+    color: 'var(--text-secondary)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  previewPrimaryBtn: {
+    padding: '8px 18px',
+    borderRadius: 'var(--radius-sm)',
+    backgroundColor: 'var(--btn-primary-bg)',
+    color: 'var(--btn-primary-text)',
+    fontSize: 'var(--text-sm)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    border: 'none',
+    boxShadow: 'var(--shadow-sm)',
+  },
+  previewSecondaryBtn: {
+    padding: '8px 18px',
+    borderRadius: 'var(--radius-sm)',
+    backgroundColor: 'var(--bg-card)',
+    color: 'var(--text-primary)',
+    fontSize: 'var(--text-sm)',
+    fontWeight: '600',
+    cursor: 'pointer',
+    border: '1px solid var(--border-medium)',
+    boxShadow: 'var(--shadow-sm)',
+  },
+  previewAccentBadge: {
+    padding: '4px 10px',
+    borderRadius: 'var(--radius-full)',
+    backgroundColor: 'var(--accent-soft)',
+    color: 'var(--accent)',
+    fontSize: '11px',
+    fontWeight: '700',
+    border: '1px solid var(--accent)',
+  },
+  previewCompBadge: {
+    padding: '4px 10px',
+    borderRadius: 'var(--radius-full)',
+    backgroundColor: 'var(--accent-complementary)',
+    color: 'var(--accent-complementary-fg)',
+    fontSize: '11px',
+    fontWeight: '700',
+  },
+  previewStatusSuccess: {
+    padding: '4px 10px',
+    borderRadius: 'var(--radius-sm)',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    color: 'var(--status-success)',
+    fontSize: '11px',
+    fontWeight: '700',
+    border: '1px solid rgba(16, 185, 129, 0.25)',
+  },
+  previewStatusWarning: {
+    padding: '4px 10px',
+    borderRadius: 'var(--radius-sm)',
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    color: 'var(--status-warning)',
+    fontSize: '11px',
+    fontWeight: '700',
+    border: '1px solid rgba(245, 158, 11, 0.25)',
+  },
+  previewStatusError: {
+    padding: '4px 10px',
+    borderRadius: 'var(--radius-sm)',
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    color: 'var(--status-error)',
+    fontSize: '11px',
+    fontWeight: '700',
+    border: '1px solid rgba(239, 68, 68, 0.25)',
+  },
+  previewInputSample: {
+    flex: 1,
+    padding: '8px 12px',
+    borderRadius: 'var(--radius-sm)',
+    backgroundColor: 'var(--bg-input)',
+    color: 'var(--text-primary)',
+    border: '1px solid var(--border-medium)',
+    fontSize: 'var(--text-sm)',
+  },
+  previewSelectSample: {
+    flex: 1,
+    padding: '8px 12px',
+    borderRadius: 'var(--radius-sm)',
+    backgroundColor: 'var(--bg-card)',
+    color: 'var(--text-primary)',
+    border: '1px solid var(--border-medium)',
+    fontSize: 'var(--text-sm)',
+    cursor: 'pointer',
   }
 };
