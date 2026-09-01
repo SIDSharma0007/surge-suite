@@ -19,6 +19,7 @@ import RoleSwitcher from '../components/RoleSwitcher';
 import { useVoiceRecognition } from '../hooks/useVoiceRecognition';
 import { workspaceServices } from '../services/workspaceServices';
 import { taskServices } from '../services/taskServices';
+import { canEditNote, canDeleteNote } from '../utils/notesPermissions';
 import { 
   LayoutGrid, 
   Table, 
@@ -396,6 +397,8 @@ export default function Dashboard() {
   }, []);
 
   const handleCreateNote = () => {
+    if (activeWsRole === 'VIEWER') return;
+
     const authorUsername = currentUser?.username || 'member_demo';
     const authorName = currentUser?.first_name 
       ? `${currentUser.first_name} ${currentUser.last_name || ''}`.trim() 
@@ -424,6 +427,9 @@ export default function Dashboard() {
   };
 
   const handleUpdateNote = (updatedNote) => {
+    const existingNote = notes.find(n => n.id === updatedNote.id);
+    if (!existingNote || !canEditNote(existingNote, activeWsRole, currentUser)) return;
+
     const editorUsername = currentUser?.username || 'member_demo';
     const editorName = currentUser?.first_name 
       ? `${currentUser.first_name} ${currentUser.last_name || ''}`.trim() 
@@ -443,6 +449,9 @@ export default function Dashboard() {
   };
 
   const handleTogglePinNote = (noteId) => {
+    const noteToPin = notes.find(n => n.id === noteId);
+    if (!noteToPin || !canEditNote(noteToPin, activeWsRole, currentUser)) return;
+
     const updated = notes.map(n => n.id === noteId ? { ...n, isPinned: !n.isPinned } : n);
     saveNotes(updated);
   };
@@ -450,7 +459,7 @@ export default function Dashboard() {
   // Move note to trash bin (delete action)
   const handleDeleteNote = (noteId) => {
     const noteToDelete = notes.find(n => n.id === noteId);
-    if (!noteToDelete) return;
+    if (!noteToDelete || !canDeleteNote(noteToDelete, activeWsRole, currentUser)) return;
 
     // Move to bin
     const deletedNote = {
@@ -473,7 +482,7 @@ export default function Dashboard() {
   // Restore note from trash bin
   const handleRestoreNote = (noteId) => {
     const noteToRestore = deletedNotes.find(n => n.id === noteId);
-    if (!noteToRestore) return;
+    if (!noteToRestore || !canDeleteNote(noteToRestore, activeWsRole, currentUser)) return;
 
     const { deletedAt, ...restoredNote } = noteToRestore;
     restoredNote.updatedAt = new Date().toISOString();
@@ -489,13 +498,24 @@ export default function Dashboard() {
 
   // Permanently delete a single note
   const handlePermanentlyDeleteNote = (noteId) => {
+    const noteToDelete = deletedNotes.find(n => n.id === noteId);
+    if (!noteToDelete || !canDeleteNote(noteToDelete, activeWsRole, currentUser)) return;
+
     const updatedBin = deletedNotes.filter(n => n.id !== noteId);
     saveBinNotes(updatedBin);
   };
 
   // Empty the entire Trash Bin
   const handleEmptyBin = () => {
-    saveBinNotes([]);
+    if (activeWsRole === 'VIEWER') return;
+    if (activeWsRole === 'OWNER' || activeWsRole === 'ADMIN') {
+      saveBinNotes([]);
+    } else {
+      // Member can only purge their own notes from bin
+      const currentUsername = currentUser?.username;
+      const preservedBin = deletedNotes.filter(n => n.author?.username !== currentUsername);
+      saveBinNotes(preservedBin);
+    }
   };
 
   const handleOpenNote = (noteId) => {

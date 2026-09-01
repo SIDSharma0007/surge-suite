@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Pin, Trash2, X } from 'lucide-react';
+import { Pin, Trash2, X, Lock, ShieldAlert } from 'lucide-react';
 import NotesToolbar from './NotesToolbar';
 import NotesStatusBar from './NotesStatusBar';
+import { canEditNote, canDeleteNote } from '../../utils/notesPermissions';
 
 const PLACEHOLDERS = [
   "What's on your mind...",
@@ -128,6 +129,10 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete, cur
     onUpdate({ ...note, tags: currentTags.filter(t => t !== tagToRemove) });
   };
 
+  // Permission checks
+  const isEditable = canEditNote(note, userRole, currentUser);
+  const isDeletable = canDeleteNote(note, userRole, currentUser);
+
   // Resolve accent color
   const activeColorObject = COLORS_PICK.find(c => c.id === (note.color || 'default'));
   const accentColor = activeColorObject?.id === 'default' ? 'transparent' : activeColorObject?.color;
@@ -149,52 +154,63 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete, cur
             placeholder="Title"
             value={note.title || ''}
             onChange={handleTitleChange}
+            disabled={!isEditable}
+            style={{
+              cursor: !isEditable ? 'not-allowed' : 'text',
+              opacity: !isEditable ? 0.85 : 1
+            }}
             aria-label="Note Title"
           />
           
           <div style={styles.headerControls}>
-            {/* VIBGYOR Color Picker */}
-            <div className="notes-color-picker-container">
-              {COLORS_PICK.map(c => (
-                <div
-                  key={c.id}
-                  onClick={() => onUpdate({ ...note, color: c.id })}
-                  className={`notes-color-picker-dot ${note.color === c.id || (!note.color && c.id === 'default') ? 'active' : ''}`}
-                  style={{ 
-                    backgroundColor: c.id === 'default' ? 'transparent' : c.color,
-                    borderColor: c.id === 'default' ? 'var(--border-medium)' : 'transparent'
-                  }}
-                  title={c.label}
-                />
-              ))}
-            </div>
+            {/* VIBGYOR Color Picker (Only editable if allowed) */}
+            {isEditable && (
+              <div className="notes-color-picker-container">
+                {COLORS_PICK.map(c => (
+                  <div
+                    key={c.id}
+                    onClick={() => onUpdate({ ...note, color: c.id })}
+                    className={`notes-color-picker-dot ${note.color === c.id || (!note.color && c.id === 'default') ? 'active' : ''}`}
+                    style={{ 
+                      backgroundColor: c.id === 'default' ? 'transparent' : c.color,
+                      borderColor: c.id === 'default' ? 'var(--border-medium)' : 'transparent'
+                    }}
+                    title={c.label}
+                  />
+                ))}
+              </div>
+            )}
 
-            {/* Pin Action */}
-            <button
-              onClick={() => onTogglePin(note.id)}
-              style={styles.headerBtn}
-              title={note.isPinned ? "Unpin Note" : "Pin Note"}
-              className="pin-btn-hover"
-            >
-              <Pin 
-                size={16} 
-                style={{ 
-                  color: note.isPinned ? 'var(--text-primary)' : 'var(--text-muted)',
-                  fill: note.isPinned ? 'currentColor' : 'transparent',
-                  transition: 'var(--transition-all)'
-                }} 
-              />
-            </button>
+            {/* Pin Action (Only editable if allowed) */}
+            {isEditable && (
+              <button
+                onClick={() => onTogglePin(note.id)}
+                style={styles.headerBtn}
+                title={note.isPinned ? "Unpin Note" : "Pin Note"}
+                className="pin-btn-hover"
+              >
+                <Pin 
+                  size={16} 
+                  style={{ 
+                    color: note.isPinned ? 'var(--text-primary)' : 'var(--text-muted)',
+                    fill: note.isPinned ? 'currentColor' : 'transparent',
+                    transition: 'var(--transition-all)'
+                  }} 
+                />
+              </button>
+            )}
 
             {/* Trash Action */}
-            <button
-              onClick={() => onDelete(note.id)}
-              style={styles.headerBtn}
-              title="Move to Bin"
-              className="pin-btn-hover"
-            >
-              <Trash2 size={16} style={{ color: 'var(--text-muted)' }} />
-            </button>
+            {isDeletable && (
+              <button
+                onClick={() => onDelete(note.id)}
+                style={styles.headerBtn}
+                title="Move to Bin"
+                className="pin-btn-hover"
+              >
+                <Trash2 size={16} style={{ color: 'var(--text-muted)' }} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -231,6 +247,15 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete, cur
                   </span>
                 )}
               </div>
+
+              {!isEditable && (
+                <div style={styles.protectedNotice}>
+                  <Lock size={12} style={{ marginRight: '5px', color: '#f59e0b', flexShrink: 0 }} />
+                  <span>
+                    <strong>Protected Note:</strong> Authored by {authorRole === 'OWNER' ? '👑 Workspace Owner' : `${authorRole} (${authorUsername})`}. Only authorized roles can edit or delete this note.
+                  </span>
+                </div>
+              )}
             </div>
           );
         })()}
@@ -240,38 +265,46 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete, cur
           {note.tags && note.tags.map(tag => (
             <span key={tag} className="notes-editor-tag-chip">
               {tag}
-              <button 
-                onClick={() => handleRemoveTag(tag)} 
-                className="notes-editor-tag-delete-btn"
-                title={`Remove ${tag}`}
-              >
-                <X size={10} />
-              </button>
+              {isEditable && (
+                <button 
+                  onClick={() => handleRemoveTag(tag)} 
+                  className="notes-editor-tag-delete-btn"
+                  title={`Remove ${tag}`}
+                >
+                  <X size={10} />
+                </button>
+              )}
             </span>
           ))}
-          <input
-            type="text"
-            placeholder="+ Add tag..."
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            onKeyDown={handleAddTag}
-            className="notes-editor-tag-input"
-          />
+          {isEditable && (
+            <input
+              type="text"
+              placeholder="+ Add tag..."
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={handleAddTag}
+              className="notes-editor-tag-input"
+            />
+          )}
         </div>
         
         <div
           ref={editorRef}
           className="notes-body-editable"
-          contentEditable={true}
+          contentEditable={isEditable}
           onInput={handleInput}
           placeholder={bodyPlaceholder}
           aria-label="Note Body"
-          style={{ outline: 'none', marginTop: '12px' }}
+          style={{ 
+            outline: 'none', 
+            marginTop: '12px',
+            cursor: !isEditable ? 'default' : 'text'
+          }}
         />
       </div>
       
-      {/* Floating Rich-Text Toolbar */}
-      <NotesToolbar onFormat={handleFormatAction} />
+      {/* Floating Rich-Text Toolbar (Only when editable) */}
+      {isEditable && <NotesToolbar onFormat={handleFormatAction} />}
       
       {/* Dynamic Status Bar */}
       <NotesStatusBar bodyText={note.body} author={note.author} updatedAt={note.updatedAt} />
@@ -293,7 +326,22 @@ const styles = {
   authorBanner: {
     padding: '4px 0 8px 48px',
     borderBottom: '1px dashed var(--border-light)',
-    marginBottom: '8px'
+    marginBottom: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px'
+  },
+  protectedNotice: {
+    display: 'flex',
+    alignItems: 'center',
+    fontSize: '11px',
+    color: 'var(--text-secondary)',
+    background: 'rgba(245, 158, 11, 0.08)',
+    border: '1px solid rgba(245, 158, 11, 0.25)',
+    borderRadius: 'var(--radius-sm)',
+    padding: '4px 8px',
+    marginTop: '4px',
+    width: 'fit-content'
   },
   headerControls: {
     display: 'flex',
