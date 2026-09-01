@@ -105,12 +105,18 @@ export default function Dashboard() {
   const isViewerRole = activeWsRole === 'VIEWER';
   const isOwnerOrAdmin = activeWsRole === 'OWNER' || activeWsRole === 'ADMIN';
 
-  const loadTasks = async (wsId) => {
+  const loadTasks = async (wsId, preferredTaskId = null) => {
     if (!wsId) return;
     setTasksLoading(true);
     try {
       const res = await taskServices.list(wsId);
-      setTasks(res.data);
+      const fetchedTasks = res.data || [];
+      setTasks(fetchedTasks);
+      if (preferredTaskId) {
+        setSelectedTaskId(preferredTaskId);
+      } else if (fetchedTasks.length > 0) {
+        setSelectedTaskId(prev => (prev && fetchedTasks.some(t => t.id === prev)) ? prev : fetchedTasks[0].id);
+      }
     } catch (err) {
       console.error(err);
       setTaskError("Failed to load tasks.");
@@ -141,6 +147,9 @@ export default function Dashboard() {
       await refreshTaskDetails(taskId);
     } finally {
       setExecutingTaskId(null);
+      if (activeWorkspaceId) {
+        loadTasks(activeWorkspaceId, taskId);
+      }
     }
   };
 
@@ -195,7 +204,6 @@ export default function Dashboard() {
   useEffect(() => {
     if (activeWorkspaceId && activeTab === 'Tasks') {
       loadTasks(activeWorkspaceId);
-      setSelectedTaskId(null);
       setTaskError('');
     }
   }, [activeWorkspaceId, activeTab]);

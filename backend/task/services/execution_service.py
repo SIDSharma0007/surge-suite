@@ -47,13 +47,25 @@ class ExecutionService:
         
         server_name = tool_name.split(".")[0] if "." in tool_name else ""
         if server_name == "certificate_requests":
-            return any(k in statement_lower for k in ["certificate", "cert"])
+            return any(k in statement_lower for k in [
+                "certificate", "cert", "bonafide", "migration", "character", "transfer", "birth", "degree", "marksheet",
+                "सर्टिफिकेट", "प्रमाणपत्र", "बर्थ", "जन्म", "डिग्री", "मार्कशीट", "आवेदन", "बनवाओ", "बनाओ"
+            ])
         if server_name == "maintenance_tickets":
-            return any(k in statement_lower for k in ["maintenance", "ticket", "room", "facility", "broken", "leak", "repair", "fix"])
+            return any(k in statement_lower for k in [
+                "maintenance", "ticket", "room", "facility", "broken", "leak", "repair", "fix", "fan", "light", "plumbing", "ac", "tap",
+                "मरम्मत", "खराब", "टूटा", "पंखा", "बिजली", "समस्या", "ठीक", "नल"
+            ])
         if server_name == "laboratory_bookings":
-            return any(k in statement_lower for k in ["laboratory", "lab", "booking", "book"])
+            return any(k in statement_lower for k in [
+                "laboratory", "lab", "booking", "book", "slot", "schedule",
+                "लैब", "प्रयोगशाला", "बुक", "स्लॉट", "आरक्षण"
+            ])
         if server_name == "grievance_escalation":
-            return any(k in statement_lower for k in ["grievance", "complaint", "escalate", "escalation"])
+            return any(k in statement_lower for k in [
+                "grievance", "complaint", "escalate", "escalation", "issue", "dispute",
+                "शिकायत", "अपील", "समस्या", "विवाद"
+            ])
 
         if tool_name == "filesystem.list_directory":
             # list_directory is suitable if task asks to list, show, inspect files/directories,
@@ -170,11 +182,16 @@ class ExecutionService:
         has_request_tool = any(any(k in t.get("name", "").lower() for k in ["certificate", "maintenance", "laborator", "grievance", "requests"]) for t in available_tools_info)
         if has_request_tool:
             request_intents = [
-                r"\b(certificate|cert|bonafide|migration|character certificate|transfer certificate)\b",
+                r"\b(certificate|cert|bonafide|migration|character certificate|transfer certificate|birth|degree)\b",
                 r"\b(maintenance|repair|leak|broken|fix|ticket|plumbing|electrical|hvac)\b",
                 r"\b(book|booking|slot|laboratory|lab)\b",
                 r"\b(grievance|complaint|escalate|escalation)\b",
                 r"\b(submit request|create request|my request|request details)\b",
+                r"(सर्टिफिकेट|प्रमाणपत्र|जन्म|बर्थ|डिग्री|आवेदन)",
+                r"(मरम्मत|खराब|टूटा|समस्या|बिजली|पंखा|नल)",
+                r"(लैब|प्रयोगशाला|बुकिंग|बुक|स्लॉट)",
+                r"(शिकायत|अपील|विवाद)",
+                r"(बनवाओ|बनाओ|आवेदन|दर्ज|चाहिए)",
             ]
             for pattern in request_intents:
                 if re.search(pattern, statement_lower):
@@ -722,6 +739,7 @@ class ExecutionService:
             "- Always cite the source document name in your answer when referencing institutional facts.\n\n"
             "HUMAN-IN-THE-LOOP & INSTITUTIONAL REQUEST WORKFLOW RULES:\n"
             "- When a user task asks you to create, submit, or book something requiring organizational authorization (such as a certificate, maintenance work order, laboratory slot booking, grievance, or official request), you MUST invoke the appropriate request creation tool (e.g. certificate_requests.create_certificate_request, maintenance_tickets.create_maintenance_ticket, laboratory_bookings.create_lab_booking, grievance_escalation.create_grievance, or requests.create_request).\n"
+            "- MULTILINGUAL & INDIC PROMPTS (Hindi, Bengali, Odia, etc.): When the user's task is in Hindi or any non-English language (e.g. 'मेरे लिए एक बर्थ सर्टिफिकेट बनवाओ', 'लैब स्लॉट बुक करो', 'कमरे का पंखा खराब है', 'complaint दर्ज करो'), you MUST recognize the request intent, construct standard arguments, and call the appropriate tool in your first step.\n"
             "- The request will be submitted to the workspace institutional review queue in 'SUBMITTED' state.\n"
             "- In your final answer, clearly inform the user of the generated Case Reference ID (e.g. `REQ-2026-000001`), summarize what was submitted, state that it is currently awaiting review by an authorized Workspace Admin or Owner in the Review Center, and let them know they can track its status in the 'My Requests' tab.\n"
             "- Do NOT claim that an unapproved request is already completed, issued, or dispatched; always state that it is submitted and awaiting review.\n"
