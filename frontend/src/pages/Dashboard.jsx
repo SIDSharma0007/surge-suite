@@ -7,6 +7,8 @@ import SettingsTab from '../components/SettingsTab';
 import DMAgentTab from '../components/DMAgentTab';
 import MyRequestsTab from '../components/MyRequestsTab';
 import ReviewCenterTab from '../components/ReviewCenterTab';
+import SpreadsheetsTab from '../components/SpreadsheetsTab';
+import SharedFilesTab from '../components/SharedFilesTab';
 import NotificationCenter from '../components/NotificationCenter';
 import WorkspaceSettingsModal from '../components/WorkspaceSettingsModal';
 import WorkspaceMembersModal from '../components/WorkspaceMembersModal';
@@ -1571,6 +1573,32 @@ export default function Dashboard() {
               isOwnerOrAdmin={isOwnerOrAdmin} 
               onWorkspaceUpdated={fetchWorkspaces} 
             />
+          ) : activeTab === 'Spreadsheets' ? (
+            !activeWorkspaceId ? (
+              <div style={styles.emptyTabPanel}>
+                <Table size={36} strokeWidth={1.25} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
+                <h3 style={styles.emptyPanelTitle}>No Workspace Selected</h3>
+                <p style={styles.emptyPanelText}>Please select or create an active workspace first to access spreadsheets.</p>
+              </div>
+            ) : (
+              <SpreadsheetsTab 
+                workspace={activeWs} 
+                userRole={activeWsRole} 
+              />
+            )
+          ) : activeTab === 'Shared Files' ? (
+            !activeWorkspaceId ? (
+              <div style={styles.emptyTabPanel}>
+                <FolderOpen size={36} strokeWidth={1.25} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
+                <h3 style={styles.emptyPanelTitle}>No Workspace Selected</h3>
+                <p style={styles.emptyPanelText}>Please select or create an active workspace first to access shared files.</p>
+              </div>
+            ) : (
+              <SharedFilesTab 
+                workspace={activeWs} 
+                userRole={activeWsRole} 
+              />
+            )
           ) : activeTab === 'DM Agent' ? (
             <DMAgentTab activeWorkspaceId={activeWorkspaceId} workspaces={workspaces} />
           ) : (

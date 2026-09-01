@@ -44,28 +44,17 @@ class ExecutionService:
 
     def _mcp_tool_directly_satisfies(self, tool_name: str, tool_description: str, task_statement: str) -> bool:
         statement_lower = task_statement.lower()
+        from .multilingual_prompt import matches_domain_intent
         
         server_name = tool_name.split(".")[0] if "." in tool_name else ""
         if server_name == "certificate_requests":
-            return any(k in statement_lower for k in [
-                "certificate", "cert", "bonafide", "migration", "character", "transfer", "birth", "degree", "marksheet",
-                "सर्टिफिकेट", "प्रमाणपत्र", "बर्थ", "जन्म", "डिग्री", "मार्कशीट", "आवेदन", "बनवाओ", "बनाओ"
-            ])
+            return matches_domain_intent("certificate", task_statement)
         if server_name == "maintenance_tickets":
-            return any(k in statement_lower for k in [
-                "maintenance", "ticket", "room", "facility", "broken", "leak", "repair", "fix", "fan", "light", "plumbing", "ac", "tap",
-                "मरम्मत", "खराब", "टूटा", "पंखा", "बिजली", "समस्या", "ठीक", "नल"
-            ])
+            return matches_domain_intent("maintenance", task_statement)
         if server_name == "laboratory_bookings":
-            return any(k in statement_lower for k in [
-                "laboratory", "lab", "booking", "book", "slot", "schedule",
-                "लैब", "प्रयोगशाला", "बुक", "स्लॉट", "आरक्षण"
-            ])
+            return matches_domain_intent("laboratory", task_statement)
         if server_name == "grievance_escalation":
-            return any(k in statement_lower for k in [
-                "grievance", "complaint", "escalate", "escalation", "issue", "dispute",
-                "शिकायत", "अपील", "समस्या", "विवाद"
-            ])
+            return matches_domain_intent("grievance", task_statement)
 
         if tool_name == "filesystem.list_directory":
             # list_directory is suitable if task asks to list, show, inspect files/directories,
@@ -113,12 +102,22 @@ class ExecutionService:
             return [cfg["name"] for cfg in MCP_SERVER_CONFIGS]
 
         from .mcp.registry import get_all_configs
+        from .multilingual_prompt import detect_language
+        detected_lang = detect_language(task_statement)
+        is_non_english = detected_lang != 'english'
+
         configs = get_all_configs(user)
         required_servers = []
         for cfg in configs:
             if not cfg.get("is_enabled", True):
                 continue
             name = cfg["name"]
+
+            # If prompt is non-English, ensure all institutional MCP servers are provided
+            if is_non_english and name in ["certificate_requests", "maintenance_tickets", "laboratory_bookings", "grievance_escalation", "filesystem"]:
+                required_servers.append(name)
+                continue
+
             tools = cfg.get("tools", [])
             is_relevant = False
             for t in tools:
@@ -140,12 +139,13 @@ class ExecutionService:
     def _determine_external_state_requirement(self, task_statement: str, available_tools_info: list) -> bool:
         """
         Lightweight, tool-driven determination of whether a task requires external state execution.
-        Inspects available tool descriptions, names, and action verbs against the task statement.
+        Inspects available tool descriptions, names, and action verbs against the task statement across all 13 languages.
         """
         if not available_tools_info or not task_statement:
             return False
             
         statement_lower = task_statement.lower()
+        from .multilingual_prompt import matches_domain_intent, detect_language
 
         # Check for explicit filesystem, workspace inspection, or file inquiry
         filesystem_intents = [
@@ -178,24 +178,13 @@ class ExecutionService:
                 if re.search(pattern, statement_lower):
                     return True
 
-        # Check for explicit institutional request / booking / ticket / grievance intents
+        # Check for institutional domain intents across all 13 languages
         has_request_tool = any(any(k in t.get("name", "").lower() for k in ["certificate", "maintenance", "laborator", "grievance", "requests"]) for t in available_tools_info)
         if has_request_tool:
-            request_intents = [
-                r"\b(certificate|cert|bonafide|migration|character certificate|transfer certificate|birth|degree)\b",
-                r"\b(maintenance|repair|leak|broken|fix|ticket|plumbing|electrical|hvac)\b",
-                r"\b(book|booking|slot|laboratory|lab)\b",
-                r"\b(grievance|complaint|escalate|escalation)\b",
-                r"\b(submit request|create request|my request|request details)\b",
-                r"(सर्टिफिकेट|प्रमाणपत्र|जन्म|बर्थ|डिग्री|आवेदन)",
-                r"(मरम्मत|खराब|टूटा|समस्या|बिजली|पंखा|नल)",
-                r"(लैब|प्रयोगशाला|बुकिंग|बुक|स्लॉट)",
-                r"(शिकायत|अपील|विवाद)",
-                r"(बनवाओ|बनाओ|आवेदन|दर्ज|चाहिए)",
-            ]
-            for pattern in request_intents:
-                if re.search(pattern, statement_lower):
-                    return True
+            if any(matches_domain_intent(d, task_statement) for d in ["certificate", "maintenance", "laboratory", "grievance"]):
+                return True
+            if detect_language(task_statement) != 'english':
+                return True
 
         return False
 

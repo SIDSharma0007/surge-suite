@@ -16,6 +16,7 @@ SUPPORTED_EXTENSIONS = {
     '.md': 'text/markdown',
     '.markdown': 'text/markdown',
     '.csv': 'text/csv',
+    '.tsv': 'text/tab-separated-values',
     '.pdf': 'application/pdf',
     '.json': 'application/json',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -95,8 +96,8 @@ class ContextExtractor:
         try:
             if ext in ['.txt', '.md', '.markdown']:
                 normalized_text = cls._extract_text(raw_bytes)
-            elif ext == '.csv':
-                normalized_text, csv_meta = cls._extract_csv(raw_bytes)
+            elif ext in ['.csv', '.tsv']:
+                normalized_text, csv_meta = cls._extract_csv(raw_bytes, is_tsv=(ext == '.tsv'))
                 extra_meta.update(csv_meta)
             elif ext == '.json':
                 normalized_text = cls._extract_json(raw_bytes)
@@ -141,10 +142,11 @@ class ContextExtractor:
         return raw_bytes.decode('utf-8', errors='replace')
 
     @staticmethod
-    def _extract_csv(raw_bytes: bytes) -> tuple[str, dict]:
+    def _extract_csv(raw_bytes: bytes, is_tsv: bool = False) -> tuple[str, dict]:
         text = ContextExtractor._extract_text(raw_bytes)
         stream = io.StringIO(text)
-        reader = csv.reader(stream)
+        delimiter = '\t' if is_tsv or ('\t' in text and text.count('\t') > text.count(',')) else ','
+        reader = csv.reader(stream, delimiter=delimiter)
         rows = list(reader)
         
         if not rows:
