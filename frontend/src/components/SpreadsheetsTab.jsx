@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Table, Plus, Upload, Download, Save, Trash2, 
   RefreshCw, AlertCircle, CheckCircle, Lock, Shield, 
-  FileSpreadsheet, Calculator, PlusCircle, MinusCircle, FileText
+  FileSpreadsheet, Calculator, PlusCircle, MinusCircle, FileText, X
 } from 'lucide-react';
 import { workspaceServices } from '../services/workspaceServices';
 
@@ -15,7 +15,7 @@ const DEFAULT_ROWS = [
   ['', '', '', '', ''],
 ];
 
-export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
+export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER', currentUser }) {
   const [spreadsheets, setSpreadsheets] = useState([]);
   const [activeSheetId, setActiveSheetId] = useState(null);
   const [sheetName, setSheetName] = useState('Untitled Spreadsheet');
@@ -30,6 +30,56 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
   const fileInputRef = useRef(null);
 
   const isViewer = userRole === 'VIEWER';
+
+  // Find active sheet object if loaded
+  const activeSheetObj = spreadsheets.find(s => s.id === activeSheetId) || null;
+
+  // Permission helpers
+  const canEditSheet = (sheetObj) => {
+    if (isViewer) return false;
+    if (!sheetObj) return !isViewer; // brand new sheet
+    if (userRole === 'OWNER') return true;
+
+    const creatorRole = sheetObj.creator_role || (sheetObj.creator ? 'MEMBER' : 'OWNER');
+    const creatorUsername = sheetObj.creator?.username;
+    const currentUsername = currentUser?.username;
+
+    if (userRole === 'ADMIN') {
+      return creatorRole !== 'OWNER';
+    }
+
+    if (userRole === 'MEMBER') {
+      if (!sheetObj.creator) return false;
+      if (creatorRole === 'OWNER' || creatorRole === 'ADMIN') return false;
+      return creatorUsername === currentUsername || sheetObj.creator?.id === currentUser?.user_id;
+    }
+
+    return false;
+  };
+
+  const canDeleteSheet = (sheetObj) => {
+    if (isViewer || !sheetObj) return false;
+    if (userRole === 'OWNER') return true;
+
+    const creatorRole = sheetObj.creator_role || (sheetObj.creator ? 'MEMBER' : 'OWNER');
+    const creatorUsername = sheetObj.creator?.username;
+    const currentUsername = currentUser?.username;
+
+    if (userRole === 'ADMIN') {
+      return creatorRole !== 'OWNER';
+    }
+
+    if (userRole === 'MEMBER') {
+      if (!sheetObj.creator) return false;
+      if (creatorRole === 'OWNER' || creatorRole === 'ADMIN') return false;
+      return creatorUsername === currentUsername || sheetObj.creator?.id === currentUser?.user_id;
+    }
+
+    return false;
+  };
+
+  const isCurrentEditable = canEditSheet(activeSheetObj);
+  const isCurrentDeletable = canDeleteSheet(activeSheetObj);
 
   // Fetch spreadsheets from workspace context items
   const fetchSpreadsheets = async () => {
@@ -97,6 +147,7 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
 
   // Reset to blank sheet
   const handleNewSheet = () => {
+    if (isViewer) return;
     setActiveSheetId(null);
     setSheetName('Untitled Spreadsheet');
     setColumns(['Item', 'Category', 'Quantity', 'Unit Price', 'Total']);
@@ -113,7 +164,7 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
 
   // Handle cell edit
   const handleCellChange = (rowIndex, colIndex, value) => {
-    if (isViewer) return;
+    if (!isCurrentEditable) return;
     const newData = [...data];
     if (!newData[rowIndex]) {
       newData[rowIndex] = new Array(columns.length).fill('');
@@ -124,7 +175,7 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
 
   // Handle column header edit
   const handleHeaderChange = (colIndex, value) => {
-    if (isViewer) return;
+    if (!isCurrentEditable) return;
     const newCols = [...columns];
     newCols[colIndex] = value;
     setColumns(newCols);
@@ -132,19 +183,19 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
 
   // Add row
   const handleAddRow = () => {
-    if (isViewer) return;
+    if (!isCurrentEditable) return;
     setData([...data, new Array(columns.length).fill('')]);
   };
 
   // Remove row
   const handleRemoveRow = (rowIndex) => {
-    if (isViewer || data.length <= 1) return;
+    if (!isCurrentEditable || data.length <= 1) return;
     setData(data.filter((_, idx) => idx !== rowIndex));
   };
 
   // Add column
   const handleAddColumn = () => {
-    if (isViewer) return;
+    if (!isCurrentEditable) return;
     const nextColName = String.fromCharCode(65 + (columns.length % 26)) + (columns.length >= 26 ? Math.floor(columns.length / 26) : '');
     setColumns([...columns, nextColName]);
     setData(data.map(row => [...row, '']));
@@ -152,9 +203,29 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
 
   // Remove column
   const handleRemoveColumn = (colIndex) => {
-    if (isViewer || columns.length <= 1) return;
+    if (!isCurrentEditable || columns.length <= 1) return;
     setColumns(columns.filter((_, idx) => idx !== colIndex));
     setData(data.map(row => row.filter((_, idx) => idx !== colIndex)));
+  };
+
+  // Delete saved spreadsheet
+  const handleDeleteSheet = async (e, sheetObj) => {
+    e.stopPropagation();
+    if (!canDeleteSheet(sheetObj)) return;
+    if (!window.confirm(`Are you sure you want to delete "${sheetObj.original_filename || sheetObj.name}"?`)) return;
+
+    try {
+      await workspaceServices.removeContext(workspace.id, sheetObj.id);
+      setSuccessMsg(`Deleted "${sheetObj.original_filename || sheetObj.name}"`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+      if (activeSheetId === sheetObj.id) {
+        handleNewSheet();
+      }
+      fetchSpreadsheets();
+    } catch (err) {
+      console.error(err);
+      setError(err.response?.data?.error || 'Failed to delete spreadsheet.');
+    }
   };
 
   // Export current grid as CSV string
@@ -183,7 +254,7 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
 
   // Save current grid to workspace context/shared files
   const handleSaveToWorkspace = async () => {
-    if (isViewer || !workspace?.id) return;
+    if (!isCurrentEditable || !workspace?.id) return;
     setSaving(true);
     setError('');
     setSuccessMsg('');
@@ -322,11 +393,11 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
             type="text"
             value={sheetName}
             onChange={(e) => setSheetName(e.target.value)}
-            disabled={isViewer}
+            disabled={!isCurrentEditable}
             style={{
               ...styles.sheetNameInput,
-              opacity: isViewer ? 0.7 : 1,
-              cursor: isViewer ? 'not-allowed' : 'text'
+              opacity: !isCurrentEditable ? 0.7 : 1,
+              cursor: !isCurrentEditable ? 'not-allowed' : 'text'
             }}
             placeholder="Spreadsheet Name"
           />
@@ -377,7 +448,7 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
             Export CSV
           </button>
 
-          {!isViewer && (
+          {isCurrentEditable && (
             <button 
               onClick={handleSaveToWorkspace}
               disabled={saving}
@@ -412,6 +483,11 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
             ) : (
               spreadsheets.map(sheet => {
                 const isSelected = activeSheetId === sheet.id;
+                const role = sheet.creator_role || (sheet.creator ? 'MEMBER' : 'OWNER');
+                const username = sheet.creator?.username || (role === 'OWNER' ? 'Owner' : 'Member');
+                const isProtected = !canEditSheet(sheet);
+                const isDeletable = canDeleteSheet(sheet);
+
                 return (
                   <div 
                     key={sheet.id}
@@ -422,11 +498,41 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
                       background: isSelected ? 'var(--bg-hover)' : 'var(--bg-card)'
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                      <Table size={14} style={{ color: '#22c55e', flexShrink: 0 }} />
-                      <span style={styles.sheetItemName} title={sheet.original_filename || sheet.name}>
-                        {sheet.original_filename || sheet.name}
-                      </span>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
+                        <Table size={14} style={{ color: '#22c55e', flexShrink: 0 }} />
+                        <span style={styles.sheetItemName} title={sheet.original_filename || sheet.name}>
+                          {sheet.original_filename || sheet.name}
+                        </span>
+                      </div>
+                      
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '2px',
+                          padding: '1px 5px',
+                          borderRadius: 'var(--radius-full)',
+                          fontSize: '9px',
+                          fontWeight: '600',
+                          background: role === 'OWNER' ? 'rgba(168, 85, 247, 0.12)' : role === 'ADMIN' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(34, 197, 94, 0.12)',
+                          color: role === 'OWNER' ? '#c084fc' : role === 'ADMIN' ? '#60a5fa' : '#4ade80',
+                          border: `1px solid ${role === 'OWNER' ? 'rgba(168, 85, 247, 0.25)' : role === 'ADMIN' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(34, 197, 94, 0.25)'}`,
+                          whiteSpace: 'nowrap'
+                        }} title={`Created by ${role}: ${username}`}>
+                          {isProtected ? '🔒' : (role === 'OWNER' ? '👑' : role === 'ADMIN' ? '🛡️' : '👤')} {username}
+                        </span>
+
+                        {isDeletable && (
+                          <button
+                            onClick={(e) => handleDeleteSheet(e, sheet)}
+                            style={styles.sheetDeleteBtn}
+                            title="Delete Spreadsheet"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -442,11 +548,11 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
             <div style={{ display: 'flex', gap: '8px' }}>
               <button 
                 onClick={handleAddRow}
-                disabled={isViewer}
+                disabled={!isCurrentEditable}
                 style={{
                   ...styles.gridControlBtn,
-                  opacity: isViewer ? 0.5 : 1,
-                  cursor: isViewer ? 'not-allowed' : 'pointer'
+                  opacity: !isCurrentEditable ? 0.5 : 1,
+                  cursor: !isCurrentEditable ? 'not-allowed' : 'pointer'
                 }}
               >
                 <PlusCircle size={13} style={{ marginRight: '4px' }} />
@@ -454,11 +560,11 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
               </button>
               <button 
                 onClick={handleAddColumn}
-                disabled={isViewer}
+                disabled={!isCurrentEditable}
                 style={{
                   ...styles.gridControlBtn,
-                  opacity: isViewer ? 0.5 : 1,
-                  cursor: isViewer ? 'not-allowed' : 'pointer'
+                  opacity: !isCurrentEditable ? 0.5 : 1,
+                  cursor: !isCurrentEditable ? 'not-allowed' : 'pointer'
                 }}
               >
                 <PlusCircle size={13} style={{ marginRight: '4px' }} />
@@ -466,10 +572,21 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
               </button>
             </div>
 
-            {isViewer && (
-              <div style={styles.viewerBadge}>
-                <Lock size={12} style={{ marginRight: '4px' }} />
-                <span>Read-Only Viewer Mode</span>
+            {!isCurrentEditable && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                fontSize: '11px',
+                color: 'var(--text-secondary)',
+                background: 'rgba(245, 158, 11, 0.08)',
+                border: '1px solid rgba(245, 158, 11, 0.25)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 8px'
+              }}>
+                <Lock size={12} style={{ marginRight: '5px', color: '#f59e0b', flexShrink: 0 }} />
+                <span>
+                  <strong>Protected Sheet:</strong> {activeSheetObj ? `Authored by ${activeSheetObj.creator_role === 'OWNER' ? '👑 Workspace Owner' : `${activeSheetObj.creator_role} (${activeSheetObj.creator?.username})`}. Read-only.` : 'Read-only mode.'}
+                </span>
               </div>
             )}
           </div>
@@ -494,10 +611,10 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
                           type="text"
                           value={col}
                           onChange={(e) => handleHeaderChange(colIdx, e.target.value)}
-                          disabled={isViewer}
+                          disabled={!isCurrentEditable}
                           style={styles.thInput}
                         />
-                        {!isViewer && columns.length > 1 && (
+                        {isCurrentEditable && columns.length > 1 && (
                           <button 
                             onClick={(e) => {
                               e.stopPropagation();
@@ -525,17 +642,17 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER' }) {
                           type="text"
                           value={row[colIdx] || ''}
                           onChange={(e) => handleCellChange(rowIdx, colIdx, e.target.value)}
-                          disabled={isViewer}
+                          disabled={!isCurrentEditable}
                           style={{
                             ...styles.cellInput,
                             background: selectedColIndex === colIdx ? 'rgba(59, 130, 246, 0.04)' : 'transparent',
-                            cursor: isViewer ? 'default' : 'text'
+                            cursor: !isCurrentEditable ? 'default' : 'text'
                           }}
                         />
                       </td>
                     ))}
                     <td style={styles.actionTd}>
-                      {!isViewer && data.length > 1 && (
+                      {isCurrentEditable && data.length > 1 && (
                         <button 
                           onClick={() => handleRemoveRow(rowIdx)}
                           style={styles.rowDeleteBtn}
@@ -900,6 +1017,19 @@ const styles = {
   actionTd: {
     textAlign: 'center',
     padding: '0 4px'
+  },
+  sheetDeleteBtn: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-muted)',
+    cursor: 'pointer',
+    padding: '2px 4px',
+    borderRadius: 'var(--radius-sm)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'var(--transition-all)',
+    opacity: 0.7
   },
   rowDeleteBtn: {
     background: 'none',

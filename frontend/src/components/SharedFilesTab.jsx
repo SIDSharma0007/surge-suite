@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { workspaceServices } from '../services/workspaceServices';
 
-export default function SharedFilesTab({ workspace, userRole = 'MEMBER' }) {
+export default function SharedFilesTab({ workspace, userRole = 'MEMBER', currentUser }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -25,6 +25,89 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER' }) {
   const [previewFile, setPreviewFile] = useState(null);
 
   const isViewer = userRole === 'VIEWER';
+
+  const canDeleteFile = (fileItem) => {
+    if (isViewer || !fileItem) return false;
+    if (userRole === 'OWNER') return true;
+
+    const creatorRole = fileItem.creator_role || (fileItem.creator ? 'MEMBER' : 'OWNER');
+    const creatorUsername = fileItem.creator?.username;
+    const currentUsername = currentUser?.username;
+
+    if (userRole === 'ADMIN') {
+      return creatorRole !== 'OWNER';
+    }
+
+    if (userRole === 'MEMBER') {
+      if (!fileItem.creator) return false;
+      if (creatorRole === 'OWNER' || creatorRole === 'ADMIN') return false;
+      return creatorUsername === currentUsername || fileItem.creator?.id === currentUser?.user_id;
+    }
+
+    return false;
+  };
+
+  const renderFileAuthorBadge = (fileItem) => {
+    const role = fileItem.creator_role || (fileItem.creator ? 'MEMBER' : 'OWNER');
+    const username = fileItem.creator?.username || (role === 'OWNER' ? 'Owner' : 'Member');
+    const isProtected = !canDeleteFile(fileItem);
+
+    if (role === 'OWNER') {
+      return (
+        <span style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '3px',
+          padding: '2px 7px',
+          borderRadius: 'var(--radius-full)',
+          fontSize: '10px',
+          fontWeight: '600',
+          background: 'rgba(168, 85, 247, 0.12)',
+          color: '#c084fc',
+          border: '1px solid rgba(168, 85, 247, 0.25)',
+          whiteSpace: 'nowrap'
+        }} title={`Uploaded by Owner: ${username}${isProtected ? ' (Protected)' : ''}`}>
+          {isProtected ? '🔒' : '👑'} Owner ({username})
+        </span>
+      );
+    }
+    if (role === 'ADMIN') {
+      return (
+        <span style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '3px',
+          padding: '2px 7px',
+          borderRadius: 'var(--radius-full)',
+          fontSize: '10px',
+          fontWeight: '600',
+          background: 'rgba(59, 130, 246, 0.12)',
+          color: '#60a5fa',
+          border: '1px solid rgba(59, 130, 246, 0.25)',
+          whiteSpace: 'nowrap'
+        }} title={`Uploaded by Admin: ${username}${isProtected ? ' (Protected)' : ''}`}>
+          {isProtected ? '🔒' : '🛡️'} Admin ({username})
+        </span>
+      );
+    }
+    return (
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '3px',
+        padding: '2px 7px',
+        borderRadius: 'var(--radius-full)',
+        fontSize: '10px',
+        fontWeight: '600',
+        background: 'rgba(34, 197, 94, 0.12)',
+        color: '#4ade80',
+        border: '1px solid rgba(34, 197, 94, 0.25)',
+        whiteSpace: 'nowrap'
+      }} title={`Uploaded by Member: ${username}${isProtected ? ' (Protected)' : ''}`}>
+        {isProtected ? '🔒' : '👤'} Member ({username})
+      </span>
+    );
+  };
 
   const fetchFiles = async () => {
     if (!workspace?.id) return;
@@ -320,7 +403,10 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER' }) {
                       {getFileIcon(fileItem)}
                     </div>
                     <div style={styles.fileInfo}>
-                      <h4 style={styles.fileName} title={displayName}>{displayName}</h4>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', width: '100%' }}>
+                        <h4 style={styles.fileName} title={displayName}>{displayName}</h4>
+                        {renderFileAuthorBadge(fileItem)}
+                      </div>
                       <span style={styles.fileMeta}>
                         {formatFileSize(fileItem.file_size)} • {formattedDate}
                       </span>
@@ -354,7 +440,7 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER' }) {
                       Download
                     </button>
 
-                    {!isViewer && (
+                    {canDeleteFile(fileItem) ? (
                       <button 
                         onClick={() => handleDeleteFile(fileItem.id, displayName)}
                         style={{ ...styles.cardActionBtn, color: 'var(--status-error, #ef4444)' }}
@@ -362,6 +448,21 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER' }) {
                       >
                         <Trash2 size={13} />
                       </button>
+                    ) : (
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        fontSize: '11px',
+                        color: 'var(--text-muted)',
+                        padding: '4px 6px',
+                        borderRadius: 'var(--radius-sm)',
+                        background: 'rgba(245, 158, 11, 0.05)',
+                        border: '1px solid rgba(245, 158, 11, 0.15)'
+                      }} title="Protected file: Only authorized roles or creator can delete">
+                        <Lock size={11} style={{ color: '#f59e0b' }} />
+                        Protected
+                      </span>
                     )}
                   </div>
                 </div>
@@ -379,6 +480,7 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER' }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 {getFileIcon(previewFile)}
                 <h3 style={styles.modalTitle}>{previewFile.original_filename || previewFile.name}</h3>
+                {renderFileAuthorBadge(previewFile)}
               </div>
               <button onClick={() => setPreviewFile(null)} style={styles.modalCloseBtn}>
                 <X size={18} />
@@ -388,6 +490,9 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER' }) {
             <div style={styles.modalBody}>
               {/* Meta stats bar */}
               <div style={styles.metaRow}>
+                <div style={styles.metaBadge}>
+                  Author: <strong>{previewFile.creator_role === 'OWNER' ? '👑 Workspace Owner' : `${previewFile.creator_role || 'MEMBER'} (${previewFile.creator?.username || 'user'})`}</strong>
+                </div>
                 <div style={styles.metaBadge}>
                   Size: <strong>{formatFileSize(previewFile.file_size)}</strong>
                 </div>

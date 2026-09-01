@@ -1632,6 +1632,7 @@ export default function Dashboard() {
               <SpreadsheetsTab 
                 workspace={activeWs} 
                 userRole={activeWsRole} 
+                currentUser={currentUser}
               />
             )
           ) : activeTab === 'Shared Files' ? (
@@ -1645,6 +1646,7 @@ export default function Dashboard() {
               <SharedFilesTab 
                 workspace={activeWs} 
                 userRole={activeWsRole} 
+                currentUser={currentUser}
               />
             )
           ) : activeTab === 'DM Agent' ? (
