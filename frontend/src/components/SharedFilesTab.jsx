@@ -5,6 +5,7 @@ import {
   Lock, X, RefreshCw, Shield
 } from 'lucide-react';
 import { workspaceServices } from '../services/workspaceServices';
+import { formatShortName } from '../utils/formatUser';
 
 export default function SharedFilesTab({ workspace, userRole = 'MEMBER', currentUser }) {
   const [files, setFiles] = useState([]);
@@ -49,7 +50,8 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER', current
 
   const renderFileAuthorBadge = (fileItem) => {
     const role = fileItem.creator_role || (fileItem.creator ? 'MEMBER' : 'OWNER');
-    const username = fileItem.creator?.username || (role === 'OWNER' ? 'Owner' : 'Member');
+    const rawUsername = fileItem.creator?.username || (role === 'OWNER' ? 'Owner' : 'Member');
+    const shortName = formatShortName(fileItem.creator?.username, fileItem.creator?.displayName);
     const isProtected = !canDeleteFile(fileItem);
 
     if (role === 'OWNER') {
@@ -66,8 +68,8 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER', current
           color: '#c084fc',
           border: '1px solid rgba(168, 85, 247, 0.25)',
           whiteSpace: 'nowrap'
-        }} title={`Uploaded by Owner: ${username}${isProtected ? ' (Protected)' : ''}`}>
-          {isProtected ? '🔒' : '👑'} Owner ({username})
+        }} title={`Uploaded by Owner: ${rawUsername}${isProtected ? ' (Protected)' : ''}`}>
+          {isProtected ? '🔒' : '👑'} Owner ({shortName})
         </span>
       );
     }
@@ -85,8 +87,8 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER', current
           color: '#60a5fa',
           border: '1px solid rgba(59, 130, 246, 0.25)',
           whiteSpace: 'nowrap'
-        }} title={`Uploaded by Admin: ${username}${isProtected ? ' (Protected)' : ''}`}>
-          {isProtected ? '🔒' : '🛡️'} Admin ({username})
+        }} title={`Uploaded by Admin: ${rawUsername}${isProtected ? ' (Protected)' : ''}`}>
+          {isProtected ? '🔒' : '🛡️'} Admin ({shortName})
         </span>
       );
     }
@@ -103,8 +105,8 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER', current
         color: '#4ade80',
         border: '1px solid rgba(34, 197, 94, 0.25)',
         whiteSpace: 'nowrap'
-      }} title={`Uploaded by Member: ${username}${isProtected ? ' (Protected)' : ''}`}>
-        {isProtected ? '🔒' : '👤'} Member ({username})
+      }} title={`Uploaded by Member: ${rawUsername}${isProtected ? ' (Protected)' : ''}`}>
+        {isProtected ? '🔒' : '👤'} Member ({shortName})
       </span>
     );
   };
@@ -490,8 +492,8 @@ export default function SharedFilesTab({ workspace, userRole = 'MEMBER', current
             <div style={styles.modalBody}>
               {/* Meta stats bar */}
               <div style={styles.metaRow}>
-                <div style={styles.metaBadge}>
-                  Author: <strong>{previewFile.creator_role === 'OWNER' ? '👑 Workspace Owner' : `${previewFile.creator_role || 'MEMBER'} (${previewFile.creator?.username || 'user'})`}</strong>
+                <div style={styles.metaBadge} title={`Uploaded by: ${previewFile.creator?.username || ''}`}>
+                  Author: <strong>{previewFile.creator_role === 'OWNER' ? `👑 Workspace Owner (${formatShortName(previewFile.creator?.username, previewFile.creator?.displayName)})` : `${previewFile.creator_role || 'MEMBER'} (${formatShortName(previewFile.creator?.username, previewFile.creator?.displayName)})`}</strong>
                 </div>
                 <div style={styles.metaBadge}>
                   Size: <strong>{formatFileSize(previewFile.file_size)}</strong>

@@ -5,6 +5,7 @@ import {
   FileSpreadsheet, Calculator, PlusCircle, MinusCircle, FileText, X
 } from 'lucide-react';
 import { workspaceServices } from '../services/workspaceServices';
+import { formatShortName } from '../utils/formatUser';
 
 const DEFAULT_COLUMNS = ['A', 'B', 'C', 'D', 'E'];
 const DEFAULT_ROWS = [
@@ -484,7 +485,8 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER', curren
               spreadsheets.map(sheet => {
                 const isSelected = activeSheetId === sheet.id;
                 const role = sheet.creator_role || (sheet.creator ? 'MEMBER' : 'OWNER');
-                const username = sheet.creator?.username || (role === 'OWNER' ? 'Owner' : 'Member');
+                const rawUsername = sheet.creator?.username || (role === 'OWNER' ? 'Owner' : 'Member');
+                const shortName = formatShortName(sheet.creator?.username, sheet.creator?.displayName);
                 const isProtected = !canEditSheet(sheet);
                 const isDeletable = canDeleteSheet(sheet);
 
@@ -519,8 +521,8 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER', curren
                           color: role === 'OWNER' ? '#c084fc' : role === 'ADMIN' ? '#60a5fa' : '#4ade80',
                           border: `1px solid ${role === 'OWNER' ? 'rgba(168, 85, 247, 0.25)' : role === 'ADMIN' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(34, 197, 94, 0.25)'}`,
                           whiteSpace: 'nowrap'
-                        }} title={`Created by ${role}: ${username}`}>
-                          {isProtected ? '🔒' : (role === 'OWNER' ? '👑' : role === 'ADMIN' ? '🛡️' : '👤')} {username}
+                        }} title={`Created by ${role}: ${rawUsername}`}>
+                          {isProtected ? '🔒' : (role === 'OWNER' ? '👑' : role === 'ADMIN' ? '🛡️' : '👤')} {shortName}
                         </span>
 
                         {isDeletable && (
@@ -585,7 +587,7 @@ export default function SpreadsheetsTab({ workspace, userRole = 'MEMBER', curren
               }}>
                 <Lock size={12} style={{ marginRight: '5px', color: '#f59e0b', flexShrink: 0 }} />
                 <span>
-                  <strong>Protected Sheet:</strong> {activeSheetObj ? `Authored by ${activeSheetObj.creator_role === 'OWNER' ? '👑 Workspace Owner' : `${activeSheetObj.creator_role} (${activeSheetObj.creator?.username})`}. Read-only.` : 'Read-only mode.'}
+                  <strong>Protected Sheet:</strong> {activeSheetObj ? `Authored by ${activeSheetObj.creator_role === 'OWNER' ? `👑 Workspace Owner (${formatShortName(activeSheetObj.creator?.username, activeSheetObj.creator?.displayName)})` : `${activeSheetObj.creator_role} (${formatShortName(activeSheetObj.creator?.username, activeSheetObj.creator?.displayName)})`}. Read-only.` : 'Read-only mode.'}
                 </span>
               </div>
             )}

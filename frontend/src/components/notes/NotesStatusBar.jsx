@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatShortName } from '../../utils/formatUser';
 
 export default function NotesStatusBar({ bodyText, author, updatedAt }) {
   // Helper to strip HTML tags to compute accurate plain-text statistics
@@ -26,7 +27,8 @@ export default function NotesStatusBar({ bodyText, author, updatedAt }) {
   const charCount = plainText.length;
 
   const role = author?.role || 'MEMBER';
-  const username = author?.username || author?.displayName || 'Member';
+  const rawUsername = author?.username || author?.displayName || 'Member';
+  const shortName = formatShortName(author?.username, author?.displayName);
 
   return (
     <div className="notes-status-bar">
@@ -34,8 +36,8 @@ export default function NotesStatusBar({ bodyText, author, updatedAt }) {
         <span className="notes-status-draft-dot" />
         <span>Saved</span>
         <span style={{ margin: '0 6px', color: 'var(--border-medium)' }}>•</span>
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-          Author: <strong style={{ color: 'var(--text-primary)' }}>{role === 'OWNER' ? '👑 Owner' : role === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({username})</strong>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }} title={`Author: ${rawUsername}`}>
+          Author: <strong style={{ color: 'var(--text-primary)' }}>{role === 'OWNER' ? '👑 Owner' : role === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({shortName})</strong>
         </span>
       </div>
       <div className="notes-status-right">

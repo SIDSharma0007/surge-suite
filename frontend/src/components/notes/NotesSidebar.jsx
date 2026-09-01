@@ -14,6 +14,7 @@ import {
   Lock
 } from 'lucide-react';
 import { canEditNote, canDeleteNote } from '../../utils/notesPermissions';
+import { formatShortName } from '../../utils/formatUser';
 
 const COLORS_MAP = {
   default: 'var(--border-medium)',
@@ -28,7 +29,8 @@ const COLORS_MAP = {
 
 const renderAuthorBadge = (note, isEditable = true) => {
   const role = note?.author?.role || 'MEMBER';
-  const username = note?.author?.username || note?.author?.displayName || 'Member';
+  const rawUsername = note?.author?.username || note?.author?.displayName || 'Member';
+  const shortName = formatShortName(note?.author?.username, note?.author?.displayName);
   
   if (role === 'OWNER') {
     return (
@@ -44,8 +46,8 @@ const renderAuthorBadge = (note, isEditable = true) => {
         color: '#c084fc',
         border: '1px solid rgba(168, 85, 247, 0.25)',
         whiteSpace: 'nowrap'
-      }} title={`Added by Owner: ${username}${!isEditable ? ' (Protected)' : ''}`}>
-        {!isEditable ? '🔒' : '👑'} Owner ({username})
+      }} title={`Added by Owner: ${rawUsername}${!isEditable ? ' (Protected)' : ''}`}>
+        {!isEditable ? '🔒' : '👑'} Owner ({shortName})
       </span>
     );
   }
@@ -63,8 +65,8 @@ const renderAuthorBadge = (note, isEditable = true) => {
         color: '#60a5fa',
         border: '1px solid rgba(59, 130, 246, 0.25)',
         whiteSpace: 'nowrap'
-      }} title={`Added by Admin: ${username}${!isEditable ? ' (Protected)' : ''}`}>
-        {!isEditable ? '🔒' : '🛡️'} Admin ({username})
+      }} title={`Added by Admin: ${rawUsername}${!isEditable ? ' (Protected)' : ''}`}>
+        {!isEditable ? '🔒' : '🛡️'} Admin ({shortName})
       </span>
     );
   }
@@ -81,8 +83,8 @@ const renderAuthorBadge = (note, isEditable = true) => {
       color: '#4ade80',
       border: '1px solid rgba(34, 197, 94, 0.25)',
       whiteSpace: 'nowrap'
-    }} title={`Added by Member: ${username}${!isEditable ? ' (Protected)' : ''}`}>
-      {!isEditable ? '🔒' : '👤'} Member ({username})
+    }} title={`Added by Member: ${rawUsername}${!isEditable ? ' (Protected)' : ''}`}>
+      {!isEditable ? '🔒' : '👤'} Member ({shortName})
     </span>
   );
 };

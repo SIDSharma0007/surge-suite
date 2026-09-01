@@ -3,6 +3,7 @@ import { Pin, Trash2, X, Lock, ShieldAlert } from 'lucide-react';
 import NotesToolbar from './NotesToolbar';
 import NotesStatusBar from './NotesStatusBar';
 import { canEditNote, canDeleteNote } from '../../utils/notesPermissions';
+import { formatShortName } from '../../utils/formatUser';
 
 const PLACEHOLDERS = [
   "What's on your mind...",
@@ -217,33 +218,38 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete, cur
         {/* Author & Timestamp Attribution Banner */}
         {(() => {
           const authorRole = note?.author?.role || 'MEMBER';
-          const authorUsername = note?.author?.username || note?.author?.displayName || 'Member';
+          const rawAuthorUsername = note?.author?.username || note?.author?.displayName || 'Member';
+          const authorShort = formatShortName(note?.author?.username, note?.author?.displayName);
           const createdDate = note?.createdAt || note?.updatedAt;
           const formattedCreated = createdDate ? new Date(createdDate).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : '';
           const lastEditedUsername = note?.lastEditedBy?.username;
+          const lastEditedShort = formatShortName(lastEditedUsername, note?.lastEditedBy?.displayName);
           const lastEditedRole = note?.lastEditedBy?.role;
 
           return (
             <div style={styles.authorBanner}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Created by:</span>
-                <span style={{
-                  padding: '2px 8px',
-                  borderRadius: 'var(--radius-full)',
-                  fontSize: '11px',
-                  fontWeight: '600',
-                  background: authorRole === 'OWNER' ? 'rgba(168, 85, 247, 0.12)' : authorRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(34, 197, 94, 0.12)',
-                  color: authorRole === 'OWNER' ? '#c084fc' : authorRole === 'ADMIN' ? '#60a5fa' : '#4ade80',
-                  border: `1px solid ${authorRole === 'OWNER' ? 'rgba(168, 85, 247, 0.25)' : authorRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(34, 197, 94, 0.25)'}`
-                }}>
-                  {authorRole === 'OWNER' ? '👑 Owner' : authorRole === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({authorUsername})
+                <span 
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)',
+                    fontSize: '11px',
+                    fontWeight: '600',
+                    background: authorRole === 'OWNER' ? 'rgba(168, 85, 247, 0.12)' : authorRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(34, 197, 94, 0.12)',
+                    color: authorRole === 'OWNER' ? '#c084fc' : authorRole === 'ADMIN' ? '#60a5fa' : '#4ade80',
+                    border: `1px solid ${authorRole === 'OWNER' ? 'rgba(168, 85, 247, 0.25)' : authorRole === 'ADMIN' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(34, 197, 94, 0.25)'}`
+                  }}
+                  title={`Added by: ${rawAuthorUsername}`}
+                >
+                  {authorRole === 'OWNER' ? '👑 Owner' : authorRole === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({authorShort})
                 </span>
                 {formattedCreated && (
                   <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>on {formattedCreated}</span>
                 )}
-                {lastEditedUsername && lastEditedUsername !== authorUsername && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }}>
-                    • Last edited by <strong>{lastEditedRole === 'OWNER' ? '👑 Owner' : lastEditedRole === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({lastEditedUsername})</strong>
+                {lastEditedUsername && lastEditedUsername !== rawAuthorUsername && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }} title={`Last edited by: ${lastEditedUsername}`}>
+                    • Last edited by <strong>{lastEditedRole === 'OWNER' ? '👑 Owner' : lastEditedRole === 'ADMIN' ? '🛡️ Admin' : '👤 Member'} ({lastEditedShort})</strong>
                   </span>
                 )}
               </div>
@@ -252,7 +258,7 @@ export default function NotesEditor({ note, onUpdate, onTogglePin, onDelete, cur
                 <div style={styles.protectedNotice}>
                   <Lock size={12} style={{ marginRight: '5px', color: '#f59e0b', flexShrink: 0 }} />
                   <span>
-                    <strong>Protected Note:</strong> Authored by {authorRole === 'OWNER' ? '👑 Workspace Owner' : `${authorRole} (${authorUsername})`}. Only authorized roles can edit or delete this note.
+                    <strong>Protected Note:</strong> Authored by {authorRole === 'OWNER' ? `👑 Workspace Owner (${authorShort})` : `${authorRole} (${authorShort})`}. Only authorized roles can edit or delete this note.
                   </span>
                 </div>
               )}
