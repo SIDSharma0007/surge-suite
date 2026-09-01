@@ -186,7 +186,40 @@ input, select, textarea {
   transition: var(--transition-all);
 }
 
-input:focus-visible {
+/* Select & Option Dropdowns */
+select {
+  color-scheme: dark light;
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.theme-dark {
+  color-scheme: dark;
+}
+
+.theme-light {
+  color-scheme: light;
+}
+
+.theme-dark select,
+.theme-dark select option {
+  background-color: #18181b !important;
+  color: #f4f4f5 !important;
+}
+
+.theme-light select,
+.theme-light select option {
+  background-color: #ffffff !important;
+  color: #111111 !important;
+}
+
+select option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  padding: 8px 12px;
+}
+
+input:focus-visible, select:focus-visible {
   border-color: var(--border-focus) !important;
   box-shadow: 0 0 0 3px var(--bg-focus-ring) !important;
 }

@@ -485,7 +485,14 @@ export default function SettingsTab({ activeWorkspaceId, userRole = 'OWNER', isO
                       disabled={!isOwnerOrAdmin || workspaceSaving}
                     >
                       {Object.keys(registry).map(provId => (
-                        <option key={provId} value={provId}>
+                        <option 
+                          key={provId} 
+                          value={provId}
+                          style={{
+                            backgroundColor: 'var(--bg-card)',
+                            color: 'var(--text-primary)',
+                          }}
+                        >
                           {registry[provId]?.display_name || provId}
                         </option>
                       ))}
@@ -505,7 +512,14 @@ export default function SettingsTab({ activeWorkspaceId, userRole = 'OWNER', isO
                       disabled={!isOwnerOrAdmin || workspaceSaving}
                     >
                       {(registry[selectedProvider]?.models || []).map(modelId => (
-                        <option key={modelId} value={modelId}>
+                        <option 
+                          key={modelId} 
+                          value={modelId}
+                          style={{
+                            backgroundColor: 'var(--bg-card)',
+                            color: 'var(--text-primary)',
+                          }}
+                        >
                           {modelId}
                         </option>
                       ))}
@@ -1031,7 +1045,7 @@ const styles = {
     padding: '10px 12px',
     borderRadius: 'var(--radius-md)',
     border: '1px solid var(--border-medium)',
-    backgroundColor: 'var(--bg-app)',
+    backgroundColor: 'var(--bg-card)',
     color: 'var(--text-primary)',
     fontSize: 'var(--text-sm)',
     outline: 'none',
