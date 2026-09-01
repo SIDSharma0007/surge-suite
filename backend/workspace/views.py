@@ -1,3 +1,4 @@
+import json
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -500,9 +501,62 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
-        system_instruction = workspace.system_prompt
-        if not system_instruction or not system_instruction.strip():
-            system_instruction = "You are an AI assistant in Surge Suite."
+        system_instruction = (
+            "You are Surge Suite's Read-Only Workspace Assistant.\n"
+            "You can inspect authorized workspace information using read-only database and MCP capabilities.\n\n"
+            "CRITICAL GROUNDING & SAFETY RULES:\n"
+            "1. You MUST NOT:\n"
+            "   - create records\n"
+            "   - modify records\n"
+            "   - delete records\n"
+            "   - book laboratories\n"
+            "   - cancel bookings\n"
+            "   - escalate grievances\n"
+            "   - submit grievances or certificates\n"
+            "   - approve commands\n"
+            "   - execute shell commands\n"
+            "   - perform any other state-changing operation\n"
+            "2. If the user asks for an action that changes state (e.g. 'book a lab', 'submit a complaint', 'run a command', 'create a certificate'), politely explain that DM is strictly read-only and that they must use the Task system for state-changing actions.\n"
+            "3. Never invent or hallucinate workspace data. Only claim information that was obtained from an authorized database or MCP read operation.\n"
+            "4. If information cannot be retrieved or no matching records exist, clearly say that no matching records were found.\n\n"
+            "TOOL CALL FORMAT:\n"
+            "To call a read-only tool, respond with a JSON object:\n"
+            "{\n"
+            "  \"tool_call\": {\n"
+            "    \"name\": \"tool_name\",\n"
+            "    \"arguments\": {}\n"
+            "  }\n"
+            "}\n\n"
+            "FINAL ANSWER FORMAT:\n"
+            "When you have the required workspace data (or for purely general informational conversation), provide a helpful natural-language markdown response without wrapping in a tool call JSON object."
+        )
+        if workspace.system_prompt and workspace.system_prompt.strip():
+            system_instruction += f"\n\nWORKSPACE SPECIFIC INSTRUCTIONS:\n{workspace.system_prompt}"
+
+        # Initialize MCP registry and ReadOnlyToolExecutor
+        from task.services.mcp.registry import MCPRegistry
+        from task.services.read_only_tool_executor import ReadOnlyToolExecutor
+        from task.services.dm_artifact_service import DMArtifactService
+
+        mcp_registry = MCPRegistry(user=request.user, workspace=workspace)
+        try:
+            mcp_registry.initialize_servers(user=request.user)
+        except Exception:
+            pass
+
+        executor = ReadOnlyToolExecutor(user=request.user, workspace=workspace, mcp_registry=mcp_registry)
+        available_tools = executor.get_read_only_tools()
+
+        # Format available tools
+        tool_descriptions = []
+        for t in available_tools:
+            tool_descriptions.append(
+                f"- Tool: {t['name']}\n"
+                f"  Type: {t.get('type', 'read_only')}\n"
+                f"  Description: {t.get('description', '')}\n"
+                f"  Arguments Schema: {json.dumps(t.get('input_schema', {}))}"
+            )
+        tools_block = "AVAILABLE READ-ONLY TOOLS:\n" + ("\n".join(tool_descriptions) if tool_descriptions else "None")
 
         try:
             context_res = ContextService.get_context(workspace.id, request.user.id)
@@ -514,37 +568,227 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         prompt_parts = []
         if context_block:
             prompt_parts.append(context_block)
+        prompt_parts.append(tools_block)
+
         for turn in history:
             role_label = "User" if turn["role"] == "user" else "Assistant"
             prompt_parts.append(f"{role_label}: {turn['content']}")
         prompt_parts.append(f"User: {message}")
-        prompt = "\n".join(prompt_parts)
+        prompt = "\n\n".join(prompt_parts)
 
-        # Generate response
+        # Execution loop
+        data_sources = []
+        last_structured_data = None
+        last_topic = "Workspace Data"
+        loop_turns = []
+        max_steps = 4
+        step = 0
+        final_message = ""
+        mode_used = "READ_ONLY"
+
+        # Check intent for direct refusal if state mutation is requested in simulated mode or prompt
+        msg_lower = message.lower()
+        is_mutation_prompt = any(k in msg_lower for k in [
+            "book lab", "book a lab", "create a booking", "cancel booking", "cancel my booking",
+            "submit grievance", "create grievance", "escalate grievance", "escalate my grievance",
+            "request certificate", "create certificate", "submit certificate", "cancel certificate",
+            "create maintenance", "submit maintenance ticket", "close ticket",
+            "execute command", "run command", "rm ", "drop table"
+        ])
+
+        if is_mutation_prompt and not is_real:
+            mcp_registry.shutdown()
+            return Response({
+                "message": "I can inspect and show you existing workspace records, but I cannot perform state-changing actions from DM. Please use the Tasks system for actions such as creating bookings, submitting grievances, or requesting certificates.",
+                "provider": provider_name,
+                "model": model_name,
+                "mode": mode_used,
+                "access_mode": "READ_ONLY",
+                "data_sources": [],
+                "artifact": None
+            }, status=status.HTTP_200_OK)
+
         try:
-            output, mode = model_provider.generate(
-                prompt,
-                system_instruction=system_instruction,
-                api_key=resolved_key,
-                model=model_name
-            )
-        except Exception as e:
-            return Response(
-                {"error": "Unable to reach the selected AI provider. Check your provider configuration."},
-                status=status.HTTP_400_BAD_REQUEST
+            while step < max_steps:
+                step += 1
+                current_prompt = prompt
+                if loop_turns:
+                    current_prompt += "\n\n" + "\n\n".join(loop_turns)
+
+                output, mode = model_provider.generate(
+                    current_prompt,
+                    system_instruction=system_instruction,
+                    api_key=resolved_key,
+                    model=model_name
+                )
+                if mode:
+                    mode_used = mode
+
+                if not output or output.startswith("Error:"):
+                    # If provider failed, return 400
+                    mcp_registry.shutdown()
+                    return Response(
+                        {"error": "Unable to reach the selected AI provider. Check your provider configuration."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Check if output contains a tool call
+                tool_call_match = None
+                clean_output = output.strip()
+
+                # Try parsing raw json or code-blocked json
+                import re
+                json_candidates = []
+                if clean_output.startswith("{") and clean_output.endswith("}"):
+                    json_candidates.append(clean_output)
+                
+                # Regex for markdown codeblock json
+                code_matches = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', clean_output, re.DOTALL)
+                json_candidates.extend(code_matches)
+
+                # Look for {"tool_call": ...} anywhere in text
+                generic_match = re.search(r'\{\s*"tool_call"\s*:\s*\{.*?\}\s*\}', clean_output, re.DOTALL)
+                if generic_match:
+                    json_candidates.append(generic_match.group(0))
+
+                parsed_tool_call = None
+                for cand in json_candidates:
+                    try:
+                        data = json.loads(cand)
+                        if isinstance(data, dict) and "tool_call" in data and isinstance(data["tool_call"], dict):
+                            parsed_tool_call = data["tool_call"]
+                            break
+                    except Exception:
+                        continue
+
+                # If in simulated mode and user asked for workspace data but model didn't call tool, help guide it
+                if not parsed_tool_call and not is_real:
+                    if any(w in msg_lower for w in ["grievance", "complaint"]):
+                        parsed_tool_call = {"name": "workspace_data.list_grievances", "arguments": {}}
+                    elif any(w in msg_lower for w in ["lab", "booking", "laboratory"]):
+                        parsed_tool_call = {"name": "workspace_data.list_lab_bookings", "arguments": {}}
+                    elif any(w in msg_lower for w in ["certificate", "bonafide"]):
+                        parsed_tool_call = {"name": "workspace_data.list_certificate_requests", "arguments": {}}
+                    elif any(w in msg_lower for w in ["maintenance", "ticket", "facility"]):
+                        parsed_tool_call = {"name": "workspace_data.list_maintenance_tickets", "arguments": {}}
+                    elif any(w in msg_lower for w in ["task", "execution"]):
+                        parsed_tool_call = {"name": "workspace_data.list_tasks", "arguments": {}}
+                    elif any(w in msg_lower for w in ["approval", "approved", "pending approval"]):
+                        parsed_tool_call = {"name": "workspace_data.list_approvals", "arguments": {}}
+                    elif any(w in msg_lower for w in ["request", "my requests"]):
+                        parsed_tool_call = {"name": "workspace_data.list_requests", "arguments": {}}
+
+                if parsed_tool_call and step < max_steps:
+                    tool_name = parsed_tool_call.get("name", "")
+                    tool_args = parsed_tool_call.get("arguments", {})
+
+                    # Track data source
+                    if "." in tool_name:
+                        prefix, rest = tool_name.split(".", 1)
+                        if prefix == "workspace_data":
+                            data_sources.append({"type": "database", "source": rest})
+                        else:
+                            data_sources.append({"type": "mcp", "server": prefix})
+                    else:
+                        data_sources.append({"type": "builtin", "tool": tool_name})
+
+                    # Execute read-only tool
+                    tool_result = executor.execute(tool_name, tool_args)
+                    last_structured_data = tool_result
+                    last_topic = tool_name.split(".")[-1].replace("_", " ").title()
+
+                    loop_turns.append(f"Assistant Tool Call: {json.dumps({'tool_call': parsed_tool_call})}")
+                    loop_turns.append(f"Tool Result ({tool_name}): {json.dumps(tool_result)}")
+                    continue
+                else:
+                    # Final response reached
+                    final_message = clean_output
+                    break
+
+        finally:
+            mcp_registry.shutdown()
+
+        # Handle mutation intent in simulated mode if not refused
+        if is_mutation_prompt and not is_real and ("task" not in final_message.lower() and "cannot" not in final_message.lower() and "read-only" not in final_message.lower()):
+            final_message = "I can inspect and show you existing workspace records, but I cannot perform state-changing actions from DM. Please use the Tasks system for actions such as creating bookings, submitting grievances, or requesting certificates."
+
+        # If simulated mode with tool results and plain mock message was generated, produce a natural response
+        if not is_real and last_structured_data and (final_message.startswith("[Simulated Response]") or not final_message):
+            if "grievances" in last_structured_data:
+                g_list = last_structured_data["grievances"]
+                if not g_list:
+                    final_message = "You have no grievances filed in this workspace."
+                else:
+                    final_message = f"You have {len(g_list)} grievance(s):\n" + "\n".join([f"- **{g.get('subject')}** (Status: {g.get('status')}, Dept: {g.get('department') or 'General'})" for g in g_list])
+            elif "lab_bookings" in last_structured_data:
+                b_list = last_structured_data["lab_bookings"]
+                if not b_list:
+                    final_message = "You have no laboratory bookings in this workspace."
+                else:
+                    final_message = f"You have {len(b_list)} laboratory booking(s):\n" + "\n".join([f"- **{b.get('lab_name')}** on {b.get('date')} ({b.get('start_time')} - {b.get('end_time')}) [Status: {b.get('status')}]" for b in b_list])
+            elif "certificate_requests" in last_structured_data:
+                c_list = last_structured_data["certificate_requests"]
+                if not c_list:
+                    final_message = "You have no certificate requests in this workspace."
+                else:
+                    final_message = f"You have {len(c_list)} certificate request(s):\n" + "\n".join([f"- **{c.get('certificate_type')}** (Status: {c.get('status')})" for c in c_list])
+            elif "maintenance_tickets" in last_structured_data:
+                m_list = last_structured_data["maintenance_tickets"]
+                if not m_list:
+                    final_message = "You have no maintenance tickets in this workspace."
+                else:
+                    final_message = f"You have {len(m_list)} maintenance ticket(s):\n" + "\n".join([f"- **{m.get('category')}** at {m.get('location')} (Status: {m.get('status')}): {m.get('description')}" for m in m_list])
+            elif "tasks" in last_structured_data:
+                t_list = last_structured_data["tasks"]
+                if not t_list:
+                    final_message = "You have no tasks in this workspace."
+                else:
+                    final_message = f"You have {len(t_list)} task(s) in this workspace:\n" + "\n".join([f"- Task: \"{t.get('problem_statement')}\" (Status: {t.get('status')})" for t in t_list])
+            elif "approvals" in last_structured_data:
+                a_list = last_structured_data["approvals"]
+                if not a_list:
+                    final_message = "You have no pending approval requests."
+                else:
+                    final_message = f"You have {len(a_list)} approval request(s):\n" + "\n".join([f"- Command: `{a.get('sanitized_display_command')}` (Status: {a.get('status')}, Reason: {a.get('reason')})" for a in a_list])
+            elif "requests" in last_structured_data:
+                r_list = last_structured_data["requests"]
+                if not r_list:
+                    final_message = "You have no institutional requests in this workspace."
+                else:
+                    final_message = f"You have {len(r_list)} institutional request(s):\n" + "\n".join([f"- [{r.get('display_id')}] **{r.get('title')}** ({r.get('request_type')}, Status: {r.get('decision_status')})" for r in r_list])
+            elif "error" in last_structured_data:
+                final_message = f"Could not retrieve data: {last_structured_data['error']}"
+
+        # Check if user requested Markdown export
+        artifact = None
+        wants_export = any(k in msg_lower for k in [
+            "markdown file", "as a markdown", "as markdown", "export as markdown",
+            "export these", "export to markdown", "give me markdown", "download as markdown"
+        ]) or request.data.get("export") is True
+
+        if wants_export and last_structured_data:
+            artifact = DMArtifactService.generate_markdown_artifact(
+                last_structured_data,
+                topic=last_topic
             )
 
-        if output.startswith("Error:"):
-            return Response(
-                {"error": "Unable to reach the selected AI provider. Check your provider configuration."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Deduplicate data_sources by type + (source or server or tool)
+        unique_sources = []
+        seen_keys = set()
+        for src in data_sources:
+            key = tuple(sorted(src.items()))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_sources.append(src)
 
         return Response({
-            "message": output,
+            "message": final_message,
             "provider": provider_name,
             "model": model_name,
-            "mode": mode
+            "mode": mode_used,
+            "access_mode": "READ_ONLY",
+            "data_sources": unique_sources,
+            "artifact": artifact
         }, status=status.HTTP_200_OK)
 
     # --- Workspace Skills Management Actions ---

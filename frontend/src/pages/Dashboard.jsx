@@ -89,6 +89,9 @@ export default function Dashboard() {
   const [approvalLoading, setApprovalLoading] = useState(false);
   const [approvalError, setApprovalError] = useState('');
   const [viewingWalkthrough, setViewingWalkthrough] = useState(false);
+  const [followUpPrompt, setFollowUpPrompt] = useState('');
+  const [showFollowUpModal, setShowFollowUpModal] = useState(false);
+  const [followUpLoading, setFollowUpLoading] = useState(false);
 
   // Voice recognition hook for multilingual voice commands
   const {
@@ -185,6 +188,46 @@ export default function Dashboard() {
       await refreshTaskDetails(taskId);
     } finally {
       setExecutingTaskId(null);
+      if (activeWorkspaceId) {
+        loadTasks(activeWorkspaceId, taskId);
+      }
+    }
+  };
+
+  const handleRetryTask = async (taskId) => {
+    setExecutingTaskId(taskId);
+    setTaskError('');
+    setApprovalError('');
+    try {
+      await taskServices.retry(taskId);
+      await refreshTaskDetails(taskId);
+    } catch (err) {
+      console.error(err);
+      setTaskError("Retry failed: " + (err.response?.data?.error || err.message));
+      await refreshTaskDetails(taskId);
+    } finally {
+      setExecutingTaskId(null);
+      if (activeWorkspaceId) {
+        loadTasks(activeWorkspaceId, taskId);
+      }
+    }
+  };
+
+  const handleFollowUpSubmit = async (taskId) => {
+    if (!followUpPrompt.trim() || followUpLoading) return;
+    setFollowUpLoading(true);
+    setTaskError('');
+    try {
+      await taskServices.followUp(taskId, followUpPrompt.trim());
+      setFollowUpPrompt('');
+      setShowFollowUpModal(false);
+      await refreshTaskDetails(taskId);
+    } catch (err) {
+      console.error(err);
+      setTaskError("Follow-up failed: " + (err.response?.data?.error || err.message));
+      await refreshTaskDetails(taskId);
+    } finally {
+      setFollowUpLoading(false);
       if (activeWorkspaceId) {
         loadTasks(activeWorkspaceId, taskId);
       }
@@ -1241,14 +1284,37 @@ export default function Dashboard() {
                               <div style={styles.taskDetailCard}>
                                 <div style={styles.detailCardHeader}>
                                   <h3 style={styles.detailTitle}>Task Details</h3>
-                                  {selectedTask.status !== 'RUNNING' && selectedTask.status !== 'WAITING_FOR_APPROVAL' && (
-                                    <button
-                                      onClick={() => handleExecuteTask(selectedTask.id)}
-                                      style={{ ...styles.btnSave, padding: '6px 12px', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontWeight: '600', fontSize: 'var(--text-xs)' }}
-                                      disabled={executingTaskId !== null}
-                                    >
-                                      Re-run Task
-                                    </button>
+                                  {selectedTask.status !== 'RUNNING' && selectedTask.status !== 'WAITING_FOR_APPROVAL' && !isViewerRole && (
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                      <button
+                                        onClick={() => handleRetryTask(selectedTask.id)}
+                                        style={{ ...styles.btnSave, padding: '6px 12px', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontWeight: '600', fontSize: 'var(--text-xs)' }}
+                                        disabled={executingTaskId !== null}
+                                        title="Re-run this task from the beginning"
+                                      >
+                                        🔄 Retry
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setFollowUpPrompt('');
+                                          setShowFollowUpModal(true);
+                                        }}
+                                        style={{
+                                          padding: '6px 12px',
+                                          background: 'var(--bg-hover)',
+                                          color: 'var(--text-primary)',
+                                          border: '1px solid var(--border-medium)',
+                                          borderRadius: 'var(--radius-md)',
+                                          cursor: 'pointer',
+                                          fontWeight: '600',
+                                          fontSize: 'var(--text-xs)'
+                                        }}
+                                        disabled={executingTaskId !== null}
+                                        title="Provide feedback or clarification to continue this task"
+                                      >
+                                        💬 Follow-Up
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                                 
@@ -1411,6 +1477,47 @@ export default function Dashboard() {
                                       <div style={{ fontFamily: 'monospace', fontSize: '12px', background: 'rgba(0,0,0,0.05)', padding: '10px', borderRadius: '4px', whiteSpace: 'pre-wrap' }}>
                                         {selectedTask.result || (activeExec?.error) || "The task execution failed with an unknown error."}
                                       </div>
+                                      {!isViewerRole && (
+                                        <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRetryTask(selectedTask.id)}
+                                            disabled={executingTaskId !== null}
+                                            style={{
+                                              padding: '6px 14px',
+                                              background: 'var(--status-error, #ef4444)',
+                                              color: '#ffffff',
+                                              border: 'none',
+                                              borderRadius: 'var(--radius-sm)',
+                                              cursor: 'pointer',
+                                              fontWeight: '600',
+                                              fontSize: '12px'
+                                            }}
+                                          >
+                                            🔄 Retry Task
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setFollowUpPrompt('');
+                                              setShowFollowUpModal(true);
+                                            }}
+                                            disabled={executingTaskId !== null}
+                                            style={{
+                                              padding: '6px 14px',
+                                              background: 'var(--bg-hover)',
+                                              color: 'var(--text-primary)',
+                                              border: '1px solid var(--border-medium)',
+                                              borderRadius: 'var(--radius-sm)',
+                                              cursor: 'pointer',
+                                              fontWeight: '600',
+                                              fontSize: '12px'
+                                            }}
+                                          >
+                                            💬 Send Follow-Up
+                                          </button>
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 ) : null}
@@ -1507,6 +1614,46 @@ export default function Dashboard() {
                                     </div>
                                   );
                                 })()}
+
+                                {/* Execution History & Lineage */}
+                                {selectedTask.executions && selectedTask.executions.length > 1 && (
+                                  <div style={{ marginTop: '24px' }}>
+                                    <h4 style={styles.timelineHeader}>Execution History ({selectedTask.executions.length} attempts)</h4>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: 'var(--bg-hover)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
+                                      {selectedTask.executions.map((ex, exIdx) => (
+                                        <div key={ex.id || exIdx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px' }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{
+                                              padding: '2px 6px',
+                                              borderRadius: '4px',
+                                              fontWeight: '600',
+                                              fontSize: '10px',
+                                              background: ex.execution_type === 'FOLLOW_UP' ? 'rgba(59, 130, 246, 0.15)' : ex.execution_type === 'RETRY' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(107, 114, 128, 0.15)',
+                                              color: ex.execution_type === 'FOLLOW_UP' ? '#3b82f6' : ex.execution_type === 'RETRY' ? '#eab308' : 'var(--text-muted)'
+                                            }}>
+                                              {ex.execution_type || 'INITIAL'}
+                                            </span>
+                                            <span style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                                              Attempt #{selectedTask.executions.length - exIdx}
+                                            </span>
+                                          </div>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{
+                                              fontSize: '11px',
+                                              fontWeight: '600',
+                                              color: ex.status === 'COMPLETED' ? 'var(--status-success, #22c55e)' : ex.status === 'FAILED' ? 'var(--status-error, #ef4444)' : 'var(--text-muted)'
+                                            }}>
+                                              {ex.status}
+                                            </span>
+                                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                              {new Date(ex.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
 
                                 {/* Human-readable Timeline */}
                                 <div style={{ marginTop: '24px' }}>
@@ -1867,6 +2014,115 @@ export default function Dashboard() {
                   );
                 })()
               )}
+
+              {/* Follow-Up Clarification Modal */}
+              {showFollowUpModal && selectedTaskId && (() => {
+                const selectedTask = tasks.find(t => t.id === selectedTaskId);
+                if (!selectedTask) return null;
+                return (
+                  <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000,
+                    backdropFilter: 'blur(4px)'
+                  }}>
+                    <div style={{
+                      backgroundColor: 'var(--bg-card)',
+                      border: '1px solid var(--border-medium)',
+                      borderRadius: 'var(--radius-lg)',
+                      padding: '24px',
+                      width: '90%',
+                      maxWidth: '520px',
+                      boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)'
+                    }}>
+                      <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: '600', color: 'var(--text-primary)' }}>
+                        Send Follow-Up / Clarification
+                      </h3>
+                      <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                        Provide additional instructions or clarification to guide the agent without losing context.
+                      </p>
+                      <div style={{
+                        padding: '10px 12px',
+                        backgroundColor: 'var(--bg-hover)',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-light)',
+                        marginBottom: '16px',
+                        fontSize: '12px',
+                        color: 'var(--text-secondary)'
+                      }}>
+                        <strong>Task:</strong> "{selectedTask.problem_statement}"
+                      </div>
+                      <textarea
+                        value={followUpPrompt}
+                        onChange={(e) => setFollowUpPrompt(e.target.value)}
+                        placeholder="Enter your clarification, updated instructions, or answers to the agent's questions..."
+                        rows={4}
+                        style={{
+                          width: '100%',
+                          boxSizing: 'border-box',
+                          padding: '10px 12px',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border-medium)',
+                          backgroundColor: 'var(--bg-app-solid)',
+                          color: 'var(--text-primary)',
+                          fontSize: '13px',
+                          fontFamily: 'inherit',
+                          resize: 'vertical',
+                          outline: 'none',
+                          marginBottom: '16px'
+                        }}
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowFollowUpModal(false);
+                            setFollowUpPrompt('');
+                          }}
+                          disabled={followUpLoading}
+                          style={{
+                            padding: '8px 16px',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border-medium)',
+                            background: 'transparent',
+                            color: 'var(--text-primary)',
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleFollowUpSubmit(selectedTask.id)}
+                          disabled={!followUpPrompt.trim() || followUpLoading}
+                          style={{
+                            padding: '8px 16px',
+                            borderRadius: 'var(--radius-md)',
+                            border: 'none',
+                            background: 'var(--primary-color, #007aff)',
+                            color: '#ffffff',
+                            fontSize: '13px',
+                            fontWeight: '600',
+                            cursor: (!followUpPrompt.trim() || followUpLoading) ? 'not-allowed' : 'pointer',
+                            opacity: (!followUpPrompt.trim() || followUpLoading) ? 0.6 : 1
+                          }}
+                        >
+                          {followUpLoading ? 'Executing Follow-Up...' : 'Send Follow-Up'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           ) : activeTab === 'My Requests' ? (
             !activeWorkspaceId ? (

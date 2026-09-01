@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { workspaceServices } from '../services/workspaceServices';
-import { Send, Trash2, AlertCircle, Bot, User, Loader2 } from 'lucide-react';
+import { Send, Trash2, AlertCircle, Bot, User, Loader2, Download, Database, Server, ShieldCheck } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 
 export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
@@ -52,11 +52,26 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
     );
   }
 
-  const handleSend = async (e) => {
-    if (e) e.preventDefault();
-    if (!inputValue.trim() || loading) return;
+  const handleDownloadArtifact = (artifact) => {
+    if (!artifact || !artifact.content) return;
+    const blob = new Blob([artifact.content], { type: 'text/markdown;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', artifact.filename || 'workspace-data.md');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
-    const userMessage = inputValue.trim();
+  const handleSend = async (e, forceExport = false) => {
+    if (e) e.preventDefault();
+    const queryText = (inputValue || '').trim();
+    if (!queryText && !forceExport) return;
+    if (loading) return;
+
+    const userMessage = queryText || (forceExport ? "Export as markdown" : "");
     setInputValue('');
     setError(null);
 
@@ -74,7 +89,8 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
 
       const response = await workspaceServices.dm(activeWorkspaceId, {
         message: userMessage,
-        history: history
+        history: history,
+        export: forceExport
       });
 
       const reply = response.data;
@@ -85,7 +101,9 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
           content: reply.message,
           provider: reply.provider,
           model: reply.model,
-          mode: reply.mode
+          mode: reply.mode,
+          data_sources: reply.data_sources || [],
+          artifact: reply.artifact || null
         }
       ]);
     } catch (err) {
@@ -124,7 +142,13 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
       {/* Configuration Header Banner */}
       <header style={styles.chatHeader}>
         <div style={styles.headerInfo}>
-          <h3 style={styles.headerTitle}>DM the Agent</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <h3 style={styles.headerTitle}>DM the Agent</h3>
+            <span style={styles.readOnlyBadge}>
+              <ShieldCheck size={12} style={{ color: '#0A84FF' }} />
+              Workspace data · READ ONLY
+            </span>
+          </div>
           <p style={styles.headerSubtitle}>
             Workspace: <strong>{config?.name}</strong>
           </p>
@@ -152,9 +176,13 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
         {messages.length === 0 ? (
           <div style={styles.introContainer}>
             <Bot size={36} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
-            <h4 style={styles.introTitle}>Direct Message Agent</h4>
+            <h4 style={styles.introTitle}>Direct Message Workspace Assistant</h4>
             <p style={styles.introText}>
-              Start a conversation with the agent configured for this workspace. Messages are processed in real-time.
+              Ask questions about your grievances, laboratory bookings, certificates, maintenance tickets, or tasks. 
+              <br /><br />
+              <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
+                💡 <em>DM is strictly read-only and safe. To create records or book slots, please use Tasks.</em>
+              </span>
             </p>
           </div>
         ) : (
@@ -178,12 +206,43 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
                 ) : (
                   <div className="markdown-body-chat" style={styles.markdownWrapper}>
                     <MarkdownRenderer text={m.content} />
+
+                    {/* Data sources pills */}
+                    {m.data_sources && m.data_sources.length > 0 && (
+                      <div style={styles.sourcesContainer}>
+                        <span style={styles.sourcesLabel}>Sources:</span>
+                        {m.data_sources.map((src, sIdx) => (
+                          <span key={sIdx} style={styles.sourcePill}>
+                            {src.type === 'database' ? (
+                              <Database size={11} style={{ marginRight: '4px' }} />
+                            ) : (
+                              <Server size={11} style={{ marginRight: '4px' }} />
+                            )}
+                            {src.source || src.server || src.tool || 'Workspace DB'}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Export as Markdown action button */}
+                    {m.artifact && (
+                      <div style={styles.artifactContainer}>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadArtifact(m.artifact)}
+                          style={styles.exportButton}
+                        >
+                          <Download size={13} style={{ marginRight: '6px' }} />
+                          Export as Markdown ({m.artifact.filename})
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
                 
-                {m.role === 'assistant' && m.mode && (
+                {m.role === 'assistant' && (
                   <div style={styles.bubbleMeta}>
-                    {getProviderDisplayName(m.provider)} · {m.model} · {m.mode}
+                    {getProviderDisplayName(m.provider)} · {m.model} · {m.mode || 'READ_ONLY'}
                   </div>
                 )}
               </div>
@@ -204,7 +263,7 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
             </div>
             <div style={{ ...styles.botBubble, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Loader2 size={16} className="animate-spin" style={{ color: 'var(--text-secondary)', animation: 'spin 1s linear infinite' }} />
-              <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Agent is typing...</span>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Agent is querying workspace data...</span>
             </div>
           </div>
         )}
@@ -239,7 +298,7 @@ export default function DMAgentTab({ activeWorkspaceId, workspaces }) {
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+            placeholder="Ask about workspace records... (e.g., 'Show all my grievances', 'List lab bookings')"
             disabled={loading}
             rows={1}
             style={styles.chatInput}
@@ -311,6 +370,18 @@ const styles = {
     fontWeight: '600',
     margin: 0,
     color: 'var(--text-primary)'
+  },
+  readOnlyBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    fontSize: '11px',
+    fontWeight: '600',
+    padding: '2px 8px',
+    borderRadius: '12px',
+    backgroundColor: 'rgba(10, 132, 255, 0.12)',
+    color: '#0A84FF',
+    border: '1px solid rgba(10, 132, 255, 0.25)'
   },
   headerSubtitle: {
     fontSize: '12px',
@@ -420,6 +491,48 @@ const styles = {
     lineHeight: '1.5',
     color: 'var(--text-primary)'
   },
+  sourcesContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginTop: '10px',
+    paddingTop: '8px',
+    borderTop: '1px solid var(--border-medium)'
+  },
+  sourcesLabel: {
+    fontSize: '11px',
+    color: 'var(--text-muted)',
+    fontWeight: '500'
+  },
+  sourcePill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    fontSize: '11px',
+    fontFamily: 'monospace',
+    padding: '2px 8px',
+    borderRadius: '6px',
+    backgroundColor: 'var(--bg-hover)',
+    color: 'var(--text-secondary)',
+    border: '1px solid var(--border-medium)'
+  },
+  artifactContainer: {
+    marginTop: '10px',
+    display: 'flex'
+  },
+  exportButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    fontSize: '12px',
+    fontWeight: '500',
+    padding: '6px 12px',
+    borderRadius: '6px',
+    backgroundColor: 'rgba(10, 132, 255, 0.1)',
+    color: '#0A84FF',
+    border: '1px solid rgba(10, 132, 255, 0.3)',
+    cursor: 'pointer',
+    transition: 'all 0.15s ease'
+  },
   errorBanner: {
     display: 'flex',
     alignItems: 'center',
@@ -455,10 +568,7 @@ const styles = {
     cursor: 'pointer',
     padding: '8px',
     borderRadius: '6px',
-    transition: 'background-color 0.2s',
-    ':hover': {
-      backgroundColor: 'var(--bg-hover)'
-    }
+    transition: 'background-color 0.2s'
   },
   chatInput: {
     flex: 1,
@@ -485,3 +595,4 @@ const styles = {
     transition: 'background-color 0.2s'
   }
 };
+

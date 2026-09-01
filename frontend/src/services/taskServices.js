@@ -50,6 +50,20 @@ export const taskServices = {
   },
 
   /**
+   * Re-run an existing task.
+   */
+  retry(id) {
+    return api.post(`/tasks/${id}/retry/`, {}, { timeout: 120000 });
+  },
+
+  /**
+   * Continue an existing task with follow-up clarification/feedback.
+   */
+  followUp(id, prompt) {
+    return api.post(`/tasks/${id}/follow-up/`, { prompt }, { timeout: 120000 });
+  },
+
+  /**
    * Phase 4.7: Approve a pending shell command authorization request.
    * "Allow Once" — approves ONLY this exact pending command for this task.
    */
@@ -65,3 +79,4 @@ export const taskServices = {
     return api.post(`/tasks/${taskId}/approvals/${approvalId}/deny/`, {}, { timeout: 120000 });
   },
 };
+

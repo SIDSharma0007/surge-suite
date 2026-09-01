@@ -33,7 +33,6 @@ TOOL_MINIMUM_ROLES = {
     "certificate_requests.get_certificate_status": "VIEWER",
     "grievance_escalation.list_grievances": "VIEWER",
     "grievance_escalation.get_grievance": "VIEWER",
-    "grievance_escalation.get_grievance_status": "VIEWER",
     "maintenance_tickets.list_maintenance_tickets": "VIEWER",
     "maintenance_tickets.get_maintenance_ticket": "VIEWER",
     "maintenance_tickets.get_ticket_status": "VIEWER",
@@ -43,8 +42,57 @@ TOOL_MINIMUM_ROLES = {
     "laboratory_bookings.list_user_bookings": "VIEWER",
     "filesystem.read_file": "VIEWER",
     "filesystem.list_directory": "VIEWER",
+    "search.search_web": "VIEWER",
     "search.search_documents": "VIEWER",
 }
+
+TOOL_ACCESS_LEVELS = {
+    # Read-Only Inspection Tools -> READ
+    "certificate_requests.list_certificate_requests": "READ",
+    "certificate_requests.get_certificate_request": "READ",
+    "certificate_requests.get_certificate_status": "READ",
+    "grievance_escalation.list_grievances": "READ",
+    "grievance_escalation.get_grievance": "READ",
+    "grievance_escalation.get_grievance_status": "READ",
+    "maintenance_tickets.list_maintenance_tickets": "READ",
+    "maintenance_tickets.get_maintenance_ticket": "READ",
+    "maintenance_tickets.get_ticket_status": "READ",
+    "laboratory_bookings.list_laboratories": "READ",
+    "laboratory_bookings.get_lab_availability": "READ",
+    "laboratory_bookings.get_lab_booking": "READ",
+    "laboratory_bookings.list_user_bookings": "READ",
+    "filesystem.read_file": "READ",
+    "filesystem.list_directory": "READ",
+    "search.search_web": "READ",
+    "search.search_documents": "READ",
+
+    # Mutating / Creation Tools -> WRITE
+    "certificate_requests.create_certificate_request": "WRITE",
+    "certificate_requests.cancel_certificate_request": "WRITE",
+    "grievance_escalation.create_grievance": "WRITE",
+    "grievance_escalation.update_grievance": "WRITE",
+    "grievance_escalation.escalate_grievance": "REQUIRES_APPROVAL",
+    "maintenance_tickets.create_maintenance_ticket": "WRITE",
+    "maintenance_tickets.update_maintenance_ticket": "WRITE",
+    "maintenance_tickets.close_maintenance_ticket": "WRITE",
+    "laboratory_bookings.create_lab_booking": "WRITE",
+    "laboratory_bookings.cancel_lab_booking": "WRITE",
+    "filesystem.write_file": "WRITE",
+    "builtin.database.query": "READ",
+    "bash.execute": "REQUIRES_APPROVAL",
+}
+
+def get_tool_access_level(tool_name: str) -> str:
+    if tool_name in TOOL_ACCESS_LEVELS:
+        return TOOL_ACCESS_LEVELS[tool_name]
+    base_name = tool_name.split(".")[-1]
+    if any(base_name.startswith(verb) for verb in ["list_", "get_", "check_", "read_", "search_"]):
+        return "READ"
+    if any(base_name.startswith(verb) for verb in ["delete_", "destroy_", "drop_", "purge_"]):
+        return "DESTRUCTIVE"
+    if any(base_name.startswith(verb) for verb in ["escalate_", "approve_"]):
+        return "REQUIRES_APPROVAL"
+    return "WRITE"
 
 class MCPRegistry:
     def __init__(self, user=None, workspace=None):
@@ -184,6 +232,7 @@ class MCPRegistry:
                         "description": t.get("description", ""),
                         "input_schema": t.get("inputSchema", {}),
                         "type": "mcp",
+                        "access": get_tool_access_level(prefixed_name),
                         "original_name": t["name"]
                     }
                     self.tools[prefixed_name] = (client, tool_info)

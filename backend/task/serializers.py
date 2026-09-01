@@ -45,7 +45,7 @@ class TaskExecutionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'status', 'mode', 'started_at', 'completed_at', 
             'result', 'error', 'actions', 'events', 'agent_details',
-            'provider', 'model'
+            'provider', 'model', 'prompt', 'execution_type', 'parent_execution'
         ]
         read_only_fields = ['id', 'started_at', 'completed_at']
 

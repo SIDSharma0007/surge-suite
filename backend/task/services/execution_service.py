@@ -475,7 +475,7 @@ class ExecutionService:
 
         return sanitized_walkthrough
 
-    def execute_task(self, task, user=None):
+    def execute_task(self, task, user=None, prompt=None, execution_type='INITIAL', parent_execution=None):
         if not task.assigned_agent:
             task.status = 'FAILED'
             task.save()
@@ -487,6 +487,7 @@ class ExecutionService:
             return None
 
         agent = task.assigned_agent
+        actual_prompt = prompt if prompt is not None else task.problem_statement
         
         # Determine the model provider to use.
         # If execution service was initialized with a specific provider override (e.g. FakeModelProvider for tests), we use it.
@@ -518,6 +519,9 @@ class ExecutionService:
                     mode='REAL',
                     provider=provider_name,
                     model=model_name,
+                    prompt=actual_prompt,
+                    execution_type=execution_type,
+                    parent_execution=parent_execution,
                     error=str(err)
                 )
                 
@@ -570,14 +574,17 @@ class ExecutionService:
                         mode='REAL',
                         provider=provider_name,
                         model=model_name,
-                        error=f"Configure this provider under Settings -> AI Providers."
+                        prompt=actual_prompt,
+                        execution_type=execution_type,
+                        parent_execution=parent_execution,
+                        error=f"Configure this provider under Settings → AI Providers."
                     )
                     
                     ExecutionEvent.objects.create(
                         task=task,
                         execution=execution,
                         event_type='EXECUTION_FAILED',
-                        metadata=sanitize_data({'error': f"Configure this provider under Settings -> AI Providers."})
+                        metadata=sanitize_data({'error': f"Configure this provider under Settings → AI Providers."})
                     )
                     return execution
             else:
@@ -594,7 +601,10 @@ class ExecutionService:
             status='RUNNING',
             mode='REAL' if is_real else 'SIMULATED',
             provider=provider_name,
-            model=model_name
+            model=model_name,
+            prompt=actual_prompt,
+            execution_type=execution_type,
+            parent_execution=parent_execution
         )
 
         from .mcp.registry import MCPRegistry
@@ -616,7 +626,7 @@ class ExecutionService:
             metadata=sanitize_data({'message': 'Discovering dynamic MCP tools...'}, resolved_key)
         )
 
-        required_mcp_servers = self._determine_required_mcp_servers(task.problem_statement, user=task.creator, is_real=is_real)
+        required_mcp_servers = self._determine_required_mcp_servers(actual_prompt, user=task.creator, is_real=is_real)
 
         mcp_registry = MCPRegistry(user=task.creator, workspace=task.workspace)
         mcp_tools = []
@@ -697,7 +707,7 @@ class ExecutionService:
 
         # Determine if the task semantically requires external state / tools
         task_requires_external_state = self._determine_external_state_requirement(
-            task.problem_statement,
+            actual_prompt,
             mcp_tools + builtin_capabilities
         ) if is_real else False
 
@@ -758,7 +768,7 @@ class ExecutionService:
 
         # Enhance system instruction with Indic / multilingual directives (Hindi, Bengali, Odia, English)
         from .multilingual_prompt import enhance_system_instruction
-        system_instruction = enhance_system_instruction(system_instruction, task.problem_statement)
+        system_instruction = enhance_system_instruction(system_instruction, actual_prompt)
 
         # Retrieve workspace-level context data (safely framed as DATA ONLY)
         try:
@@ -774,11 +784,11 @@ class ExecutionService:
 
         rag_chunks = []
         if workspace.institutional_knowledge_enabled:
-            rag_chunks = RAGService.retrieve_trusted_knowledge(workspace, task.problem_statement)
+            rag_chunks = RAGService.retrieve_trusted_knowledge(workspace, actual_prompt)
 
         verification_status = UncertaintyStatus.VERIFIED
         if workspace.institutional_knowledge_enabled:
-            verification_status = UncertaintyDetector.classify_verification(rag_chunks, task.problem_statement)
+            verification_status = UncertaintyDetector.classify_verification(rag_chunks, actual_prompt)
 
         applicable_policies = []
         if workspace.policy_engine_enabled:
@@ -833,7 +843,7 @@ class ExecutionService:
             prompt_elements.append(policy_info_block)
 
         prompt_elements.append(f"AVAILABLE TOOLS:\n{capabilities_text}")
-        prompt_elements.append(f"Task: {task.problem_statement}")
+        prompt_elements.append(f"Task: {actual_prompt}")
 
         prompt_with_history = "\n\n".join(prompt_elements) + "\n\n"
 

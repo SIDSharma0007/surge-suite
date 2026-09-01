@@ -114,7 +114,15 @@ def matches_domain_intent(domain: str, text: str) -> bool:
         return False
     text_lower = text.lower()
     keywords = MULTILINGUAL_DOMAIN_KEYWORDS.get(domain, [])
-    return any(k.lower() in text_lower for k in keywords)
+    for k in keywords:
+        k_lower = k.lower()
+        if k_lower.isascii() and len(k_lower) <= 4:
+            if re.search(r'\b' + re.escape(k_lower) + r'\b', text_lower):
+                return True
+        else:
+            if k_lower in text_lower:
+                return True
+    return False
 
 def detect_language(text: str) -> str:
     """

@@ -148,6 +148,130 @@ class TaskViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(task)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'], permission_classes=[IsWorkspaceMemberForTask])
+    def retry(self, request, pk=None):
+        """
+        Re-run the same task without modifying the original problem statement.
+        Creates a new TaskExecution linked to the previous execution as RETRY.
+        """
+        task = get_object_or_404(Task, id=pk)
+        self.check_object_permissions(request, task)
+
+        # Reject VIEWER role from executing tasks
+        is_viewer = task.workspace.owner != request.user and task.workspace.memberships.filter(user=request.user, role='VIEWER').exists()
+        if is_viewer:
+            return Response(
+                {"error": "Permission Denied: Read-only VIEWER role cannot retry tasks."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if task.status == 'RUNNING':
+            return Response(
+                {"error": "Task is already executing."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        latest_exec = task.executions.order_by('-started_at').first()
+        retry_prompt = latest_exec.prompt if (latest_exec and latest_exec.prompt) else task.problem_statement
+
+        execution_service = ExecutionService()
+        try:
+            execution = execution_service.execute_task(
+                task,
+                user=request.user,
+                prompt=retry_prompt,
+                execution_type='RETRY',
+                parent_execution=latest_exec
+            )
+        except Exception as e:
+            task.status = 'FAILED'
+            task.result = f"Retry error: {str(e)}"
+            task.save()
+            from .models import ExecutionEvent
+            ExecutionEvent.objects.create(
+                task=task,
+                event_type='EXECUTION_FAILED',
+                metadata={'error': str(e)}
+            )
+            return Response(
+                {"error": f"Retry failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        task.refresh_from_db()
+        serializer = self.get_serializer(task)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='follow-up', permission_classes=[IsWorkspaceMemberForTask])
+    def follow_up(self, request, pk=None):
+        """
+        Continue an existing task with user clarification or feedback.
+        Creates a new TaskExecution linked to the previous execution as FOLLOW_UP.
+        """
+        task = get_object_or_404(Task, id=pk)
+        self.check_object_permissions(request, task)
+
+        # Reject VIEWER role from executing tasks
+        is_viewer = task.workspace.owner != request.user and task.workspace.memberships.filter(user=request.user, role='VIEWER').exists()
+        if is_viewer:
+            return Response(
+                {"error": "Permission Denied: Read-only VIEWER role cannot submit follow-ups."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if task.status == 'RUNNING':
+            return Response(
+                {"error": "Task is already executing."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        followup_text = request.data.get('prompt')
+        if not followup_text or not isinstance(followup_text, str) or not followup_text.strip():
+            return Response(
+                {"error": "A non-empty 'prompt' field is required for a follow-up."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        latest_exec = task.executions.order_by('-started_at').first()
+        prev_result = (latest_exec.result if latest_exec else None) or (latest_exec.error if latest_exec else None) or "None"
+        if len(prev_result) > 1500:
+            prev_result = prev_result[:1500] + "... [truncated]"
+
+        contextual_prompt = (
+            f"Original task:\n{task.problem_statement}\n\n"
+            f"Previous execution result:\n{prev_result}\n\n"
+            f"User follow-up:\n{followup_text.strip()}\n\n"
+            f"Instruction:\nContinue the existing task using the user's clarification."
+        )
+
+        execution_service = ExecutionService()
+        try:
+            execution = execution_service.execute_task(
+                task,
+                user=request.user,
+                prompt=contextual_prompt,
+                execution_type='FOLLOW_UP',
+                parent_execution=latest_exec
+            )
+        except Exception as e:
+            task.status = 'FAILED'
+            task.result = f"Follow-up error: {str(e)}"
+            task.save()
+            from .models import ExecutionEvent
+            ExecutionEvent.objects.create(
+                task=task,
+                event_type='EXECUTION_FAILED',
+                metadata={'error': str(e)}
+            )
+            return Response(
+                {"error": f"Follow-up execution failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        task.refresh_from_db()
+        serializer = self.get_serializer(task)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=['get'], permission_classes=[IsWorkspaceMemberForTask])
     def walkthrough(self, request, pk=None):
         import os

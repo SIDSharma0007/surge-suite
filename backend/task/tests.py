@@ -728,6 +728,12 @@ class ProviderCredentialsTestCase(TestCase):
             ai_provider='gemini',
             ai_model='gemini-2.5-flash'
         )
+        self.workspace_b = Workspace.objects.create(
+            name="User B's Workspace", 
+            owner=self.user_b,
+            ai_provider='gemini',
+            ai_model='gemini-2.5-flash'
+        )
         
         # Clear any agents created by migrations during setup
         Agent.objects.all().delete()

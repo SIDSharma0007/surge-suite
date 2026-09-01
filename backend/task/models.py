@@ -74,8 +74,28 @@ class TaskExecution(models.Model):
     result = models.TextField(blank=True, null=True)
     error = models.TextField(blank=True, null=True)
 
+    EXECUTION_TYPES = [
+        ('INITIAL', 'Initial'),
+        ('RETRY', 'Retry'),
+        ('FOLLOW_UP', 'Follow Up'),
+    ]
+
+    prompt = models.TextField(blank=True, default='')
+    execution_type = models.CharField(
+        max_length=20,
+        choices=EXECUTION_TYPES,
+        default='INITIAL'
+    )
+    parent_execution = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='child_executions'
+    )
+
     def __str__(self):
-        return f"Execution {self.id} (Task: {self.task_id})"
+        return f"Execution {self.id} [{self.execution_type}] (Task: {self.task_id})"
 
 class Action(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

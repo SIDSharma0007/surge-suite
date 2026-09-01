@@ -32,6 +32,11 @@ class ApprovalRequiredException(Exception):
         return cmd
 
 
+ACCESS_READ = "READ"
+ACCESS_WRITE = "WRITE"
+ACCESS_DESTRUCTIVE = "DESTRUCTIVE"
+ACCESS_REQUIRES_APPROVAL = "REQUIRES_APPROVAL"
+
 class CapabilityRegistry:
     def __init__(self, user=None, workspace=None):
         self.user = user
@@ -39,13 +44,14 @@ class CapabilityRegistry:
         self.capabilities = {}
         self.register_default_capabilities()
 
-    def register_tool(self, name, description, schema, handler, tool_type):
+    def register_tool(self, name, description, schema, handler, tool_type, access=ACCESS_READ):
         self.capabilities[name] = {
             "name": name,
             "description": description,
             "schema": schema,
             "handler": handler,
-            "type": tool_type
+            "type": tool_type,
+            "access": access
         }
 
     def discover_capabilities(self) -> list[dict]:
@@ -54,7 +60,8 @@ class CapabilityRegistry:
                 "name": cap["name"],
                 "description": cap["description"],
                 "schema": cap["schema"],
-                "type": cap["type"]
+                "type": cap["type"],
+                "access": cap.get("access", ACCESS_READ)
             }
             for cap in self.capabilities.values()
         ]
@@ -84,7 +91,8 @@ class CapabilityRegistry:
                 "required": ["sql"]
             },
             handler=self.handle_database_query,
-            tool_type="builtin"
+            tool_type="builtin",
+            access=ACCESS_READ
         )
 
         # 2. bash.execute (FALLBACK)
@@ -103,7 +111,8 @@ class CapabilityRegistry:
                 "required": ["command"]
             },
             handler=self.handle_bash_execute,
-            tool_type="fallback"
+            tool_type="fallback",
+            access=ACCESS_REQUIRES_APPROVAL
         )
 
         # 3. requests.list_my_requests
@@ -121,7 +130,8 @@ class CapabilityRegistry:
                 }
             },
             handler=self.handle_list_my_requests,
-            tool_type="builtin"
+            tool_type="builtin",
+            access=ACCESS_READ
         )
 
         # 4. requests.get_request_details
@@ -136,7 +146,8 @@ class CapabilityRegistry:
                 "required": ["request_id"]
             },
             handler=self.handle_get_request_details,
-            tool_type="builtin"
+            tool_type="builtin",
+            access=ACCESS_READ
         )
 
         # 5. requests.create_request
@@ -167,7 +178,8 @@ class CapabilityRegistry:
                 "required": ["request_type", "title"]
             },
             handler=self.handle_create_request,
-            tool_type="builtin"
+            tool_type="builtin",
+            access=ACCESS_WRITE
         )
 
 
@@ -335,6 +347,15 @@ class CapabilityRegistry:
         REQUIRES_APPROVAL → raise ApprovalRequiredException (caller must pause)
         BLOCKED           → raise PermissionDenied (permanently rejected)
         """
+        resolved_user = user or self.user
+        resolved_workspace = workspace or self.workspace
+        if resolved_user and resolved_workspace:
+            user_role = "OWNER" if resolved_workspace.owner == resolved_user else (
+                resolved_workspace.memberships.filter(user=resolved_user).values_list('role', flat=True).first() or "ANONYMOUS"
+            )
+            if user_role not in ["ADMIN", "OWNER"]:
+                raise PermissionDenied(f"Permission Denied: Users with role '{user_role}' are not authorized to execute shell commands. ADMIN or OWNER role is required.")
+
         command_clean = args.get("command", "").strip()
 
         tier = self._classify_command(command_clean)
