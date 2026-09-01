@@ -280,7 +280,13 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             },
             "nvidia_nim": {
                 "display_name": "NVIDIA NIM",
-                "models": ["meta/llama-3.1-8b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"]
+                "models": [
+                    "meta/llama-3.2-11b-vision-instruct",
+                    "meta/llama-3.2-3b-instruct",
+                    "meta/llama-3.2-1b-instruct",
+                    "nvidia/llama-3.1-nemotron-70b-instruct",
+                    "meta/llama-3.3-70b-instruct"
+                ]
             },
             "openclaw": {
                 "display_name": "OpenClaw",
